@@ -28,3 +28,19 @@ export async function handleGithubCallback(code: string): Promise<{
 export async function getGithubAppInstallUrl(token: string): Promise<{ url: string }> {
   return get('/api/v1/auth/github/app/install-url', token)
 }
+
+export async function handleGithubAppCallback(params: {
+  installation_id: string
+  setup_action: string
+  state: string
+}): Promise<void> {
+  const query = new URLSearchParams(params).toString()
+  const response = await fetch(`${API_BASE}/api/v1/auth/github/app/callback?${query}`, {
+    headers: { 'Content-Type': 'application/json' },
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: '요청에 실패했습니다.' }))
+    throw new Error(error.message ?? '요청에 실패했습니다.')
+  }
+}

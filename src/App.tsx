@@ -3,6 +3,7 @@ import {
   getGithubLoginUrl,
   handleGithubCallback,
   getGithubAppInstallUrl,
+  handleGithubAppCallback,
 } from './api/auth'
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
@@ -13,8 +14,28 @@ export default function App() {
   const [step, setStep] = useState<AuthStep>('idle')
   const [errorMessage, setErrorMessage] = useState('')
 
+  // /app/callback 경로: installation_id, setup_action, state를 백엔드 GET API로 전달
+  useEffect(() => {
+    if (window.location.pathname !== '/app/callback') return
+
+    const params = new URLSearchParams(window.location.search)
+    const installation_id = params.get('installation_id') ?? ''
+    const setup_action = params.get('setup_action') ?? 'install'
+    const state = params.get('state') ?? ''
+
+    setStep('callback')
+
+    handleGithubAppCallback({ installation_id, setup_action, state })
+      .then(() => setStep('done'))
+      .catch((err: unknown) => {
+        setStep('error')
+        setErrorMessage(err instanceof Error ? err.message : 'App 인증에 실패했습니다.')
+      })
+  }, [])
+
   // Step 3-6: /?code=xxx 로 돌아온 경우 처리
   useEffect(() => {
+    if (window.location.pathname === '/app/callback') return
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
     if (!code) return
