@@ -1,3 +1,5 @@
+import type { ApiResponse } from '../types/auth'
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080'
 
 async function get<T>(path: string, token?: string): Promise<T> {
@@ -5,13 +7,18 @@ async function get<T>(path: string, token?: string): Promise<T> {
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   const response = await fetch(`${API_BASE}${path}`, { headers })
+  const body: ApiResponse<T> = await response.json().catch(() => ({
+    status: response.status,
+    code: 'PARSE_ERROR',
+    message: '요청에 실패했습니다.',
+    data: null as T,
+  }))
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: '요청에 실패했습니다.' }))
-    throw new Error(error.message ?? '요청에 실패했습니다.')
+    throw new Error(body.message ?? '요청에 실패했습니다.')
   }
 
-  return response.json() as Promise<T>
+  return body.data
 }
 
 export async function getGithubLoginUrl(): Promise<{ url: string }> {
@@ -38,9 +45,14 @@ export async function handleGithubAppCallback(params: {
   const response = await fetch(`${API_BASE}/api/v1/auth/github/app/callback?${query}`, {
     headers: { 'Content-Type': 'application/json' },
   })
+  const body: ApiResponse<null> = await response.json().catch(() => ({
+    status: response.status,
+    code: 'PARSE_ERROR',
+    message: '요청에 실패했습니다.',
+    data: null,
+  }))
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: '요청에 실패했습니다.' }))
-    throw new Error(error.message ?? '요청에 실패했습니다.')
+    throw new Error(body.message ?? '요청에 실패했습니다.')
   }
 }

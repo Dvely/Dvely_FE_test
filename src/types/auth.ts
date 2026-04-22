@@ -5,3 +5,10 @@ export type AuthStep =
   | 'install'        // GitHub App 설치 필요 → 리다이렉트 중
   | 'done'           // 완료
   | 'error'          // 에러
+
+export interface ApiResponse<T> {
+  status: number
+  code: string
+  message: string
+  data: T
+}
