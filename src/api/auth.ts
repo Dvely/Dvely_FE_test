@@ -1,6 +1,5 @@
 import type { ApiResponse } from '../types/auth'
-
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080'
+import { API_BASE } from './http'
 
 async function get<T>(path: string, token?: string): Promise<T> {
   const headers: HeadersInit = { 'Content-Type': 'application/json' }
