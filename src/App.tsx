@@ -29,6 +29,15 @@ import {
   listMessages,
   sendMessage,
 } from './api/chat'
+import {
+  deploy,
+  getVersions,
+  getDeploymentCandidates,
+  getVersionDetail,
+  getDeploymentHistories,
+  getDeploymentStatus,
+  getDeploymentLogs,
+} from './api/deployment'
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
 import type {
@@ -37,6 +46,7 @@ import type {
   ProjectSummaryResponse,
 } from './types/project'
 import type { ConversationResponse } from './types/chat'
+import type { DeployTargetType, VersionResponse } from './types/deployment'
 import './App.css'
 
 const AUTH_STEP_MESSAGES: Partial<Record<AuthStep, string>> = {
@@ -108,6 +118,12 @@ export default function App() {
 
   const [conversationId, setConversationId] = useState('')
   const [messageContent, setMessageContent] = useState('')
+
+  const [deployTargetType, setDeployTargetType] = useState<DeployTargetType>('LATEST')
+  const [deployVersionName, setDeployVersionName] = useState('')
+  const [versionId, setVersionId] = useState('')
+  const [deploymentId, setDeploymentId] = useState('')
+  const [versions, setVersions] = useState<VersionResponse[]>([])
 
   const selectedImportRepository = useMemo(
     () =>
@@ -971,6 +987,194 @@ export default function App() {
           value={responses['chat.messages.list']}
         />
         <ResponseView label="Send Message Response" value={responses['chat.messages.send']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>5. 배포</h2>
+            <p className="hint">공통 Project ID로 배포 요청, 버전 목록, 배포 후보, 버전 상세, 이력 및 로그를 조회합니다.</p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Deploy Target Type</span>
+            <select
+              value={deployTargetType}
+              onChange={(event) => setDeployTargetType(event.target.value as DeployTargetType)}
+            >
+              <option value="LATEST">LATEST</option>
+              <option value="VERSION">VERSION</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Version Name (VERSION 타입일 때 필수)</span>
+            <input
+              value={deployVersionName}
+              onChange={(event) => setDeployVersionName(event.target.value)}
+              placeholder="v1.0.0"
+              disabled={deployTargetType === 'LATEST'}
+            />
+          </label>
+          <label className="field">
+            <span>Version ID</span>
+            <input
+              value={versionId}
+              onChange={(event) => setVersionId(event.target.value)}
+              placeholder="버전 목록 조회 후 선택하거나 직접 입력"
+            />
+          </label>
+          <label className="field">
+            <span>Deployment ID</span>
+            <input
+              value={deploymentId}
+              onChange={(event) => setDeploymentId(event.target.value)}
+              placeholder="배포 요청 후 자동 입력"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'deployment.deploy'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              if (
+                deployTargetType === 'VERSION' &&
+                !requireFields(key, [['Version Name', deployVersionName]])
+              ) {
+                return
+              }
+              const result = await runAuthed(key, (t) =>
+                deploy(t, projectId, {
+                  deployTargetType,
+                  versionName: deployTargetType === 'VERSION' ? deployVersionName.trim() : undefined,
+                }),
+              )
+              if (result?.deploymentId) {
+                setDeploymentId(String(result.deploymentId))
+              }
+            }}
+            disabled={loading['deployment.deploy']}
+          >
+            {loadingText('deployment.deploy', 'POST Deploy')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'deployment.versions'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) => getVersions(t, projectId))
+              if (!result) return
+              setVersions(result)
+              if (!versionId && result[0]) {
+                setVersionId(String(result[0].versionId))
+              }
+            }}
+            disabled={loading['deployment.versions']}
+          >
+            {loadingText('deployment.versions', 'GET Versions')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('deployment.candidates', [['Project ID', projectId]])) return
+              void runAuthed('deployment.candidates', (t) =>
+                getDeploymentCandidates(t, projectId),
+              )
+            }}
+            disabled={loading['deployment.candidates']}
+          >
+            {loadingText('deployment.candidates', 'GET Candidates')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('deployment.version.detail', [['Version ID', versionId]])) return
+              void runAuthed('deployment.version.detail', (t) =>
+                getVersionDetail(t, versionId),
+              )
+            }}
+            disabled={loading['deployment.version.detail']}
+          >
+            {loadingText('deployment.version.detail', 'GET Version Detail')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('deployment.histories', [['Project ID', projectId]])) return
+              void runAuthed('deployment.histories', (t) =>
+                getDeploymentHistories(t, projectId),
+              )
+            }}
+            disabled={loading['deployment.histories']}
+          >
+            {loadingText('deployment.histories', 'GET Histories')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('deployment.status', [['Deployment ID', deploymentId]])) return
+              void runAuthed('deployment.status', (t) =>
+                getDeploymentStatus(t, deploymentId),
+              )
+            }}
+            disabled={loading['deployment.status']}
+          >
+            {loadingText('deployment.status', 'GET Status')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('deployment.logs', [['Deployment ID', deploymentId]])) return
+              void runAuthed('deployment.logs', (t) =>
+                getDeploymentLogs(t, deploymentId),
+              )
+            }}
+            disabled={loading['deployment.logs']}
+          >
+            {loadingText('deployment.logs', 'GET Logs')}
+          </button>
+        </div>
+
+        {versions.length > 0 && (
+          <div className="project-list">
+            {versions.map((version) => (
+              <button
+                type="button"
+                className={
+                  String(version.versionId) === versionId
+                    ? 'project-item selected'
+                    : 'project-item'
+                }
+                key={version.versionId}
+                onClick={() => setVersionId(String(version.versionId))}
+              >
+                <strong>{version.versionName}</strong>
+                <span>
+                  #{version.versionId} · {version.deployStatus} ·{' '}
+                  {version.title} · {formatDate(version.mergedAt)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <ResponseView label="Deploy Response" value={responses['deployment.deploy']} />
+        <ResponseView label="Histories Response" value={responses['deployment.histories']} />
+        <ResponseView label="Status Response" value={responses['deployment.status']} />
+        <ResponseView label="Logs Response" value={responses['deployment.logs']} />
+        <ResponseView label="Versions Response" value={responses['deployment.versions']} />
+        <ResponseView label="Candidates Response" value={responses['deployment.candidates']} />
+        <ResponseView label="Version Detail Response" value={responses['deployment.version.detail']} />
       </section>
     </div>
   )
