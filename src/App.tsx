@@ -168,6 +168,7 @@ export default function App() {
 
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
+    const state = params.get('state') ?? ''
     if (!code) return
 
     window.history.replaceState({}, '', window.location.pathname)
@@ -175,7 +176,7 @@ export default function App() {
     setAuthStep('callback')
     setAuthError('')
 
-    handleGithubCallback(code)
+    handleGithubCallback({ code, state })
       .then(async ({ accessToken, githubAppInstalled }) => {
         setToken(accessToken)
 

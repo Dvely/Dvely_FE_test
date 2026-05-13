@@ -24,11 +24,15 @@ export async function getGithubLoginUrl(): Promise<{ url: string }> {
   return get('/api/v1/auth/github/url')
 }
 
-export async function handleGithubCallback(code: string): Promise<{
+export async function handleGithubCallback(params: {
+  code: string
+  state: string
+}): Promise<{
   accessToken: string
   githubAppInstalled: boolean
 }> {
-  return get(`/api/v1/auth/github/callback?code=${encodeURIComponent(code)}`)
+  const query = new URLSearchParams(params).toString()
+  return get(`/api/v1/auth/github/callback?${query}`)
 }
 
 export async function getGithubAppInstallUrl(token: string): Promise<{ url: string }> {
