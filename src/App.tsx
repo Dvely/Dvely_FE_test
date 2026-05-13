@@ -38,6 +38,15 @@ import {
   getDeploymentStatus,
   getDeploymentLogs,
 } from './api/deployment'
+import {
+  searchDomains,
+  listProjectDomains,
+  bindDomain,
+  getDomain,
+  getVerificationGuide,
+  checkVerification,
+  deleteDomain,
+} from './api/domainbinding'
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
 import type {
@@ -47,6 +56,11 @@ import type {
 } from './types/project'
 import type { ConversationResponse } from './types/chat'
 import type { DeployTargetType, VersionResponse } from './types/deployment'
+import type {
+  DomainResponse,
+  DomainType,
+  VerificationMethod,
+} from './types/domainbinding'
 import './App.css'
 
 const AUTH_STEP_MESSAGES: Partial<Record<AuthStep, string>> = {
@@ -124,6 +138,15 @@ export default function App() {
   const [versionId, setVersionId] = useState('')
   const [deploymentId, setDeploymentId] = useState('')
   const [versions, setVersions] = useState<VersionResponse[]>([])
+
+  const [domainSearchKeyword, setDomainSearchKeyword] = useState('')
+  const [domainId, setDomainId] = useState('')
+  const [domainType, setDomainType] = useState<DomainType>('managed_subdomain')
+  const [domainLabel, setDomainLabel] = useState('')
+  const [customHostname, setCustomHostname] = useState('')
+  const [verificationMethod, setVerificationMethod] =
+    useState<VerificationMethod>('CNAME')
+  const [domains, setDomains] = useState<DomainResponse[]>([])
 
   const selectedImportRepository = useMemo(
     () =>
@@ -1176,6 +1199,235 @@ export default function App() {
         <ResponseView label="Versions Response" value={responses['deployment.versions']} />
         <ResponseView label="Candidates Response" value={responses['deployment.candidates']} />
         <ResponseView label="Version Detail Response" value={responses['deployment.version.detail']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>6. DomainBinding</h2>
+            <p className="hint">공통 Project ID와 Domain ID로 도메인 검색, 연결, DNS 가이드, 검증을 테스트합니다.</p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Search Keyword</span>
+            <input
+              value={domainSearchKeyword}
+              onChange={(event) => setDomainSearchKeyword(event.target.value)}
+              placeholder="myproject"
+            />
+          </label>
+          <label className="field">
+            <span>Domain ID</span>
+            <input
+              value={domainId}
+              onChange={(event) => setDomainId(event.target.value)}
+              placeholder="도메인 연결 후 자동 입력"
+            />
+          </label>
+          <label className="field">
+            <span>Domain Type</span>
+            <select
+              value={domainType}
+              onChange={(event) => setDomainType(event.target.value as DomainType)}
+            >
+              <option value="managed_subdomain">managed_subdomain</option>
+              <option value="custom_domain">custom_domain</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Verification Method</span>
+            <select
+              value={verificationMethod}
+              onChange={(event) =>
+                setVerificationMethod(event.target.value as VerificationMethod)
+              }
+              disabled={domainType === 'managed_subdomain'}
+            >
+              <option value="CNAME">CNAME</option>
+              <option value="A">A</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Managed Label</span>
+            <input
+              value={domainLabel}
+              onChange={(event) => setDomainLabel(event.target.value)}
+              placeholder="myproject"
+              disabled={domainType !== 'managed_subdomain'}
+            />
+          </label>
+          <label className="field">
+            <span>Custom Hostname</span>
+            <input
+              value={customHostname}
+              onChange={(event) => setCustomHostname(event.target.value)}
+              placeholder="www.example.com"
+              disabled={domainType !== 'custom_domain'}
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'domain.search'
+              if (!requireFields(key, [['Search Keyword', domainSearchKeyword]])) {
+                return
+              }
+              const result = await runAuthed(key, (t) =>
+                searchDomains(t, domainSearchKeyword),
+              )
+              if (!result) return
+              setDomainLabel((current) => current || result.keyword)
+            }}
+            disabled={loading['domain.search']}
+          >
+            {loadingText('domain.search', 'GET Domain Search')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'domain.list'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                listProjectDomains(t, projectId),
+              )
+              if (!result) return
+              setDomains(result)
+              if (!domainId && result[0]) {
+                setDomainId(String(result[0].domainId))
+              }
+            }}
+            disabled={loading['domain.list']}
+          >
+            {loadingText('domain.list', 'GET Project Domains')}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'domain.bind'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              if (
+                domainType === 'managed_subdomain' &&
+                !requireFields(key, [['Managed Label', domainLabel]])
+              ) {
+                return
+              }
+              if (
+                domainType === 'custom_domain' &&
+                !requireFields(key, [['Custom Hostname', customHostname]])
+              ) {
+                return
+              }
+              const result = await runAuthed(key, (t) =>
+                bindDomain(t, projectId, {
+                  type: domainType,
+                  label:
+                    domainType === 'managed_subdomain'
+                      ? domainLabel.trim()
+                      : undefined,
+                  hostname:
+                    domainType === 'custom_domain'
+                      ? customHostname.trim()
+                      : undefined,
+                  verificationMethod:
+                    domainType === 'custom_domain'
+                      ? verificationMethod
+                      : undefined,
+                }),
+              )
+              if (result?.domainId) {
+                setDomainId(String(result.domainId))
+              }
+            }}
+            disabled={loading['domain.bind']}
+          >
+            {loadingText('domain.bind', 'POST Bind Domain')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('domain.detail', [['Domain ID', domainId]])) return
+              void runAuthed('domain.detail', (t) => getDomain(t, domainId))
+            }}
+            disabled={loading['domain.detail']}
+          >
+            {loadingText('domain.detail', 'GET Domain')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('domain.guide', [['Domain ID', domainId]])) return
+              void runAuthed('domain.guide', (t) =>
+                getVerificationGuide(t, domainId),
+              )
+            }}
+            disabled={loading['domain.guide']}
+          >
+            {loadingText('domain.guide', 'GET Verification Guide')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('domain.check', [['Domain ID', domainId]])) return
+              void runAuthed('domain.check', (t) =>
+                checkVerification(t, domainId),
+              )
+            }}
+            disabled={loading['domain.check']}
+          >
+            {loadingText('domain.check', 'POST Verification Check')}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              if (!requireFields('domain.delete', [['Domain ID', domainId]])) return
+              void runAuthed('domain.delete', (t) => deleteDomain(t, domainId))
+            }}
+            disabled={loading['domain.delete']}
+          >
+            {loadingText('domain.delete', 'DELETE Domain')}
+          </button>
+        </div>
+
+        {domains.length > 0 && (
+          <div className="project-list">
+            {domains.map((domain) => (
+              <button
+                type="button"
+                className={
+                  String(domain.domainId) === domainId
+                    ? 'project-item selected'
+                    : 'project-item'
+                }
+                key={domain.domainId}
+                onClick={() => setDomainId(String(domain.domainId))}
+              >
+                <strong>{domain.hostname}</strong>
+                <span>
+                  #{domain.domainId} · {domain.type} · {domain.status}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <ResponseView label="Domain Search Response" value={responses['domain.search']} />
+        <ResponseView label="Project Domains Response" value={responses['domain.list']} />
+        <ResponseView label="Bind Domain Response" value={responses['domain.bind']} />
+        <ResponseView label="Domain Detail Response" value={responses['domain.detail']} />
+        <ResponseView label="Verification Guide Response" value={responses['domain.guide']} />
+        <ResponseView label="Verification Check Response" value={responses['domain.check']} />
+        <ResponseView label="Delete Domain Response" value={responses['domain.delete']} />
       </section>
     </div>
   )

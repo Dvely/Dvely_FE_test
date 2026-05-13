@@ -1,6 +1,6 @@
 # API 테스트 흐름(프론트엔드 콘솔)
 
-이 문서는 `Dvely_FE_test` UI로 인증, 프로젝트, GitHub 레포 선택, 채팅 API를 수동 테스트하는 흐름입니다.
+이 문서는 `Dvely_FE_test` UI로 인증, 프로젝트, GitHub 레포 선택, 채팅, 배포, DomainBinding API를 수동 테스트하는 흐름입니다.
 
 ## 전제 조건
 
@@ -10,6 +10,10 @@
    - `pnpm install`
    - `pnpm dev`
 3. 백엔드가 `http://localhost:8080`이 아니면 프론트 실행 전에 `VITE_API_BASE`를 설정합니다.
+4. DomainBinding의 관리형 서브도메인을 테스트하려면 백엔드 `.env`에 Cloudflare 값을 설정합니다.
+   - `CLOUDFLARE_API_TOKEN`
+   - `CLOUDFLARE_ZONE_ID`
+   - `CLOUDFLARE_MANAGED_DOMAIN=qeploy.com`
 
 ## 1. 인증
 
@@ -87,6 +91,82 @@
 3. 생성 응답의 `conversationId`가 공통 Conversation ID 입력에 자동 반영됩니다.
 4. 메시지를 입력하고 **Send Message**를 클릭합니다.
 5. 삭제, 휴지통 목록, 복원은 Conversation ID를 기준으로 테스트합니다.
+
+## 6. 배포
+
+1. 공통 **Project ID**를 확인합니다.
+2. GitHub Pages 배포를 테스트하려면 프로젝트 저장소가 public이고 GitHub App 권한이 유효해야 합니다.
+3. `LATEST` 배포를 테스트할 때는 **Deploy Target Type**을 `LATEST`로 둡니다.
+4. 특정 태그 기준 배포를 테스트할 때는 **Deploy Target Type**을 `VERSION`으로 바꾸고 **Version Name**에 태그명을 입력합니다.
+5. **POST Deploy**를 클릭합니다.
+6. 응답의 `deploymentId`가 공통 Deployment ID 입력에 자동 반영됩니다.
+7. 배포 상태 확인은 아래 순서로 진행합니다.
+   - `GET Histories`
+   - `GET Status`
+   - `GET Logs`
+8. 버전 관련 화면은 아래 버튼으로 확인합니다.
+   - `GET Versions`: merge/tag 기반 버전 목록 조회
+   - `GET Candidates`: 재배포/롤백 가능한 배포 후보 조회
+   - `GET Version Detail`: Version ID 기준 상세 조회
+
+예상:
+- `POST Deploy` 응답은 `IN_PROGRESS` 상태와 `pagesUrl`을 반환합니다.
+- GitHub Actions 실행이 완료되면 `GET Status`의 `status`가 `LIVE` 또는 `FAILED`로 바뀝니다.
+- `LIVE`가 되면 Project의 `currentUrl`과 배포 이력의 `deployedUrl`이 DomainBinding DNS target 계산에 사용됩니다.
+
+주의:
+- `GET Logs`는 `workflowRunId`가 기록된 뒤 정상 로그를 가져올 수 있습니다.
+- GitHub Pages 배포는 현재 GitHub Pages 정책상 public repository 조건을 따릅니다.
+- `VERSION` 배포는 입력한 태그가 GitHub 저장소에 존재해야 합니다.
+
+## 7. DomainBinding
+
+DomainBinding은 도메인 검색, 프로젝트 도메인 목록, 도메인 연결, DNS 가이드, DNS 검증, 연결 해제를 테스트합니다.
+
+### managed_subdomain 테스트
+
+1. 먼저 배포 섹션에서 프로젝트를 배포하고 `LIVE` 상태가 되었는지 확인합니다.
+2. **Search Keyword**에 사용할 라벨을 입력합니다.
+   - 예: `myproject`
+3. **GET Domain Search**를 클릭합니다.
+4. 응답에서 `myproject.qeploy.com` 후보가 `available: true`인지 확인합니다.
+5. **Domain Type**을 `managed_subdomain`으로 둡니다.
+6. **Managed Label**에 동일한 라벨을 입력합니다.
+7. **POST Bind Domain**을 클릭합니다.
+8. 응답의 `domainId`가 공통 Domain ID 입력에 자동 반영됩니다.
+9. **POST Verification Check**를 클릭한 뒤 **GET Domain**으로 상태를 확인합니다.
+10. 테스트가 끝나면 **DELETE Domain**으로 Cloudflare DNS 레코드와 연결 정보를 제거합니다.
+
+예상:
+- 연결 성공 시 Cloudflare에 `label.qeploy.com` CNAME 레코드가 생성되고, GitHub Pages custom domain에도 같은 hostname이 등록됩니다.
+- 최초 연결 응답 상태는 보통 `VERIFYING`입니다.
+- Cloudflare 레코드 조회와 GitHub Pages custom domain 확인이 모두 성공하면 verification check 후 `CONNECTED`가 됩니다.
+
+### custom_domain 테스트
+
+1. 먼저 배포 섹션에서 프로젝트를 배포하고 `LIVE` 상태가 되었는지 확인합니다.
+2. **Domain Type**을 `custom_domain`으로 바꿉니다.
+3. **Custom Hostname**에 사용자가 보유한 도메인을 입력합니다.
+   - 예: `www.example.com`
+4. **Verification Method**를 선택합니다.
+   - 일반적으로 `CNAME`
+5. **POST Bind Domain**을 클릭합니다.
+6. **GET Verification Guide**를 클릭해 DNS에 등록할 레코드를 확인합니다.
+7. 외부 DNS provider에서 안내된 CNAME/A 레코드를 등록합니다.
+8. DNS 전파 후 **POST Verification Check**를 클릭합니다.
+9. **GET Domain**으로 `CONNECTED` 여부를 확인합니다.
+
+예상:
+- custom domain은 Cloudflare DNS를 직접 수정하지 않습니다.
+- 서버는 GitHub Pages custom domain에 hostname을 등록하고, 사용자가 DNS에 설정해야 할 `dnsTarget`을 안내합니다.
+- verification check는 실제 DNS 값과 GitHub Pages custom domain 설정을 함께 확인합니다.
+
+주의:
+- Domain Search도 현재 테스트 콘솔에서는 Access Token을 붙여 호출합니다.
+- managed_subdomain은 백엔드 `.env`의 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_MANAGED_DOMAIN`이 필요합니다.
+- 현재 Cloudflare Zone ID는 `qeploy.com` 기준이어야 합니다.
+- 도메인 연결은 같은 hostname 중복 등록을 허용하지 않습니다.
+- purchasable_domain은 검색 후보만 표시하며 실제 구매/등록은 아직 지원하지 않습니다.
 
 ## 참고
 
