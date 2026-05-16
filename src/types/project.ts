@@ -1,11 +1,14 @@
 export interface CreateProjectPayload {
   name: string
-  repositoryMode?: 'create' | 'existing'
-  repositoryName?: string
-  repositoryFullName?: string
   startMode: string
   templateType?: string
   draftMode: string
+}
+
+export interface ConnectProjectRepositoryPayload {
+  repositoryMode?: 'create' | 'existing'
+  repositoryName?: string
+  repositoryFullName?: string
   repositoryVisibility: string
 }
 
@@ -27,6 +30,14 @@ export interface GithubRepositoryResponse {
   visibility: string
   defaultBranch: string | null
   updatedAt: string | null
+}
+
+export interface ProjectRepositoryResponse {
+  projectId: number
+  repositoryFullName: string
+  repositoryVisibility: string
+  bindingStatus: string
+  repositoryHealth: string
 }
 
 export interface ProjectSummaryResponse {

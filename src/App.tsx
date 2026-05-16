@@ -10,6 +10,7 @@ import { getMe } from './api/user'
 import {
   listGithubRepositories,
   createProject,
+  connectProjectRepository,
   getProjects,
   getProject,
   updateProject,
@@ -52,6 +53,7 @@ import type { AuthStep } from './types/auth'
 import type {
   GithubRepositoryResponse,
   ProjectCreateResponse,
+  ProjectRepositoryResponse,
   ProjectSummaryResponse,
 } from './types/project'
 import type { ConversationResponse } from './types/chat'
@@ -344,6 +346,28 @@ export default function App() {
       ['Project Name', projectName],
       ['Start Mode', startMode],
       ['Draft Mode', draftMode],
+    ]
+
+    if (!requireFields(key, requiredFields)) return
+
+    const created = await runAuthed<ProjectCreateResponse>(key, (t) =>
+      createProject(t, {
+        name: projectName.trim(),
+        startMode,
+        templateType: templateType.trim() || undefined,
+        draftMode: draftMode.trim(),
+      }),
+    )
+
+    if (created?.projectId) {
+      setProjectId(String(created.projectId))
+    }
+  }
+
+  const handleConnectProjectRepository = async () => {
+    const key = 'project.repository.connect'
+    const requiredFields: Array<[string, string]> = [
+      ['Project ID', projectId],
       ['Repository Visibility', repositoryVisibility],
     ]
 
@@ -355,9 +379,8 @@ export default function App() {
 
     if (!requireFields(key, requiredFields)) return
 
-    const created = await runAuthed<ProjectCreateResponse>(key, (t) =>
-      createProject(t, {
-        name: projectName.trim(),
+    await runAuthed<ProjectRepositoryResponse>(key, (t) =>
+      connectProjectRepository(t, projectId, {
         repositoryMode,
         repositoryName:
           repositoryMode === 'create'
@@ -367,16 +390,9 @@ export default function App() {
           repositoryMode === 'existing'
             ? importRepositoryFullName.trim()
             : undefined,
-        startMode,
-        templateType: templateType.trim() || undefined,
-        draftMode: draftMode.trim(),
         repositoryVisibility,
       }),
     )
-
-    if (created?.projectId) {
-      setProjectId(String(created.projectId))
-    }
   }
 
   const handleCreateConversation = async () => {
@@ -534,7 +550,7 @@ export default function App() {
             className="secondary"
             onClick={handleApplyImportRepository}
           >
-            프로젝트 가져오기에 사용
+            저장소 연결에 사용
           </button>
         </div>
         <ResponseView
@@ -546,24 +562,8 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>2. 프로젝트 생성 또는 가져오기</h2>
-            <p className="hint">새 레포 생성과 기존 레포 가져오기를 같은 위치에서 선택합니다.</p>
-          </div>
-          <div className="segmented" role="group" aria-label="Repository mode">
-            <button
-              type="button"
-              className={repositoryMode === 'create' ? 'active' : ''}
-              onClick={() => setRepositoryMode('create')}
-            >
-              새 레포 생성
-            </button>
-            <button
-              type="button"
-              className={repositoryMode === 'existing' ? 'active' : ''}
-              onClick={() => setRepositoryMode('existing')}
-            >
-              기존 레포 가져오기
-            </button>
+            <h2>2. 빈 프로젝트 생성</h2>
+            <p className="hint">GitHub 저장소 없이 프로젝트 정보만 먼저 생성합니다.</p>
           </div>
         </div>
 
@@ -576,26 +576,6 @@ export default function App() {
               placeholder="나의 프로젝트"
             />
           </label>
-
-          {repositoryMode === 'create' ? (
-            <label className="field">
-              <span>Repository Name</span>
-              <input
-                value={projectRepositoryName}
-                onChange={(event) => setProjectRepositoryName(event.target.value)}
-                placeholder="my-project-repo"
-              />
-            </label>
-          ) : (
-            <label className="field">
-              <span>Repository Full Name</span>
-              <input
-                value={importRepositoryFullName}
-                onChange={(event) => setImportRepositoryFullName(event.target.value)}
-                placeholder="owner/repo"
-              />
-            </label>
-          )}
 
           <label className="field">
             <span>Start Mode</span>
@@ -622,16 +602,6 @@ export default function App() {
               onChange={(event) => setDraftMode(event.target.value)}
               placeholder="draft"
             />
-          </label>
-          <label className="field">
-            <span>Repository Visibility</span>
-            <select
-              value={repositoryVisibility}
-              onChange={(event) => setRepositoryVisibility(event.target.value)}
-            >
-              <option value="PRIVATE">PRIVATE</option>
-              <option value="PUBLIC">PUBLIC</option>
-            </select>
           </label>
         </div>
 
@@ -689,7 +659,99 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>3. 프로젝트 확인과 변경</h2>
+            <h2>3. GitHub 저장소 연결</h2>
+            <p className="hint">생성된 Project ID에 새 저장소를 만들거나 기존 저장소를 연결합니다.</p>
+          </div>
+          <div className="segmented" role="group" aria-label="Repository mode">
+            <button
+              type="button"
+              className={repositoryMode === 'create' ? 'active' : ''}
+              onClick={() => setRepositoryMode('create')}
+            >
+              새 레포 생성
+            </button>
+            <button
+              type="button"
+              className={repositoryMode === 'existing' ? 'active' : ''}
+              onClick={() => setRepositoryMode('existing')}
+            >
+              기존 레포 연결
+            </button>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          {repositoryMode === 'create' ? (
+            <label className="field">
+              <span>Repository Name</span>
+              <input
+                value={projectRepositoryName}
+                onChange={(event) => setProjectRepositoryName(event.target.value)}
+                placeholder="my-project-repo"
+              />
+            </label>
+          ) : (
+            <label className="field">
+              <span>Repository Full Name</span>
+              <input
+                value={importRepositoryFullName}
+                onChange={(event) => setImportRepositoryFullName(event.target.value)}
+                placeholder="owner/repo"
+              />
+            </label>
+          )}
+
+          <label className="field">
+            <span>Repository Visibility</span>
+            <select
+              value={repositoryVisibility}
+              onChange={(event) => setRepositoryVisibility(event.target.value)}
+            >
+              <option value="PRIVATE">PRIVATE</option>
+              <option value="PUBLIC">PUBLIC</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="row">
+          <button
+            type="button"
+            onClick={handleConnectProjectRepository}
+            disabled={loading['project.repository.connect']}
+          >
+            {loadingText('project.repository.connect', '저장소 연결')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('project.repository.health', [['Project ID', projectId]])) {
+                return
+              }
+              void runAuthed('project.repository.health', (t) =>
+                getRepositoryHealth(t, projectId),
+              )
+            }}
+            disabled={loading['project.repository.health']}
+          >
+            {loadingText('project.repository.health', '저장소 상태 확인')}
+          </button>
+        </div>
+
+        <ResponseView
+          label="Connect Repository Response"
+          value={responses['project.repository.connect']}
+        />
+        <ResponseView
+          label="Repository Health Response"
+          value={responses['project.repository.health']}
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>4. 프로젝트 확인과 변경</h2>
             <p className="hint">공통 Project ID로 조회, 수정, 삭제, 개요 API를 호출합니다.</p>
           </div>
         </div>
@@ -840,7 +902,7 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>4. 채팅</h2>
+            <h2>5. 채팅</h2>
             <p className="hint">공통 Project ID와 Conversation ID를 이어서 사용합니다.</p>
           </div>
         </div>
@@ -1016,7 +1078,7 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>5. 배포</h2>
+            <h2>6. 배포</h2>
             <p className="hint">공통 Project ID로 배포 요청, 버전 목록, 배포 후보, 버전 상세, 이력 및 로그를 조회합니다.</p>
           </div>
         </div>
@@ -1204,7 +1266,7 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>6. DomainBinding</h2>
+            <h2>7. DomainBinding</h2>
             <p className="hint">공통 Project ID와 Domain ID로 도메인 검색, 연결, DNS 가이드, 검증을 테스트합니다.</p>
           </div>
         </div>
