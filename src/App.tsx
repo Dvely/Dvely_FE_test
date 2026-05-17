@@ -48,6 +48,13 @@ import {
   checkVerification,
   deleteDomain,
 } from './api/domainbinding'
+import {
+  listCloudConnections,
+  createCloudConnection,
+  getCloudConnection,
+  checkCloudConnectionHealth,
+  deleteCloudConnection,
+} from './api/cloudconnection'
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
 import type {
@@ -63,6 +70,12 @@ import type {
   DomainType,
   VerificationMethod,
 } from './types/domainbinding'
+import type {
+  AwsCredentialType,
+  CloudConnectionResponse,
+  CloudProvider,
+  GcpCredentialType,
+} from './types/cloudconnection'
 import './App.css'
 
 const AUTH_STEP_MESSAGES: Partial<Record<AuthStep, string>> = {
@@ -140,6 +153,26 @@ export default function App() {
   const [versionId, setVersionId] = useState('')
   const [deploymentId, setDeploymentId] = useState('')
   const [versions, setVersions] = useState<VersionResponse[]>([])
+
+  const [cloudConnectionId, setCloudConnectionId] = useState('')
+  const [cloudProvider, setCloudProvider] = useState<CloudProvider>('AWS')
+  const [awsCredentialType, setAwsCredentialType] =
+    useState<AwsCredentialType>('ACCESS_KEY')
+  const [gcpCredentialType, setGcpCredentialType] =
+    useState<GcpCredentialType>('SERVICE_ACCOUNT_KEY')
+  const [cloudDisplayName, setCloudDisplayName] = useState('AWS Seoul Account')
+  const [cloudAccountId, setCloudAccountId] = useState('')
+  const [cloudRegion, setCloudRegion] = useState('ap-northeast-2')
+  const [cloudRoleArn, setCloudRoleArn] = useState('')
+  const [awsAccessKeyId, setAwsAccessKeyId] = useState('')
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('')
+  const [awsSessionToken, setAwsSessionToken] = useState('')
+  const [gcpProjectId, setGcpProjectId] = useState('')
+  const [serviceAccountEmail, setServiceAccountEmail] = useState('')
+  const [serviceAccountKeyJson, setServiceAccountKeyJson] = useState('')
+  const [cloudConnections, setCloudConnections] = useState<
+    CloudConnectionResponse[]
+  >([])
 
   const [domainSearchKeyword, setDomainSearchKeyword] = useState('')
   const [domainId, setDomainId] = useState('')
@@ -404,6 +437,87 @@ export default function App() {
     )
     if (created?.conversationId) {
       setConversationId(String(created.conversationId))
+    }
+  }
+
+  const handleCreateCloudConnection = async () => {
+    const key = 'cloud.create'
+    const requiredFields: Array<[string, string]> = [
+      ['Display Name', cloudDisplayName],
+      ['Region', cloudRegion],
+    ]
+
+    if (cloudProvider === 'AWS') {
+      if (awsCredentialType === 'ACCESS_KEY') {
+        requiredFields.push(['AWS Access Key ID', awsAccessKeyId])
+        requiredFields.push(['AWS Secret Access Key', awsSecretAccessKey])
+      } else {
+        requiredFields.push(['AWS Account ID', cloudAccountId])
+        requiredFields.push(['AWS Role ARN', cloudRoleArn])
+      }
+    } else {
+      if (gcpCredentialType === 'SERVICE_ACCOUNT_KEY') {
+        requiredFields.push(['Service Account Key JSON', serviceAccountKeyJson])
+      } else {
+        requiredFields.push(['GCP Project ID', gcpProjectId])
+        requiredFields.push(['Service Account Email', serviceAccountEmail])
+      }
+    }
+
+    if (!requireFields(key, requiredFields)) return
+
+    const result = await runAuthed(key, (t) =>
+      createCloudConnection(t, {
+        provider: cloudProvider,
+        displayName: cloudDisplayName.trim(),
+        accountId:
+          cloudProvider === 'AWS' && cloudAccountId.trim()
+            ? cloudAccountId.trim()
+            : undefined,
+        region: cloudRegion.trim(),
+        roleArn:
+          cloudProvider === 'AWS' && awsCredentialType === 'ROLE_ARN'
+            ? cloudRoleArn.trim()
+            : undefined,
+        awsCredentialType:
+          cloudProvider === 'AWS' ? awsCredentialType : undefined,
+        accessKeyId:
+          cloudProvider === 'AWS' && awsCredentialType === 'ACCESS_KEY'
+            ? awsAccessKeyId.trim()
+            : undefined,
+        secretAccessKey:
+          cloudProvider === 'AWS' && awsCredentialType === 'ACCESS_KEY'
+            ? awsSecretAccessKey.trim()
+            : undefined,
+        sessionToken:
+          cloudProvider === 'AWS' &&
+          awsCredentialType === 'ACCESS_KEY' &&
+          awsSessionToken.trim()
+            ? awsSessionToken.trim()
+            : undefined,
+        gcpCredentialType:
+          cloudProvider === 'GCP' ? gcpCredentialType : undefined,
+        serviceAccountKeyJson:
+          cloudProvider === 'GCP' &&
+          gcpCredentialType === 'SERVICE_ACCOUNT_KEY'
+            ? serviceAccountKeyJson.trim()
+            : undefined,
+        projectId:
+          cloudProvider === 'GCP' && gcpProjectId.trim()
+            ? gcpProjectId.trim()
+            : undefined,
+        serviceAccountEmail:
+          cloudProvider === 'GCP' && serviceAccountEmail.trim()
+            ? serviceAccountEmail.trim()
+            : undefined,
+      }),
+    )
+
+    if (result?.cloudConnectionId) {
+      setCloudConnectionId(String(result.cloudConnectionId))
+      setAwsSecretAccessKey('')
+      setAwsSessionToken('')
+      setServiceAccountKeyJson('')
     }
   }
 
@@ -1266,7 +1380,299 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>7. DomainBinding</h2>
+            <h2>7. CloudConnection</h2>
+            <p className="hint">AWS/GCP BYOC 연결을 등록하고 health 상태를 확인합니다.</p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Cloud Connection ID</span>
+            <input
+              value={cloudConnectionId}
+              onChange={(event) => setCloudConnectionId(event.target.value)}
+              placeholder="등록 후 자동 입력"
+            />
+          </label>
+          <label className="field">
+            <span>Provider</span>
+            <select
+              value={cloudProvider}
+              onChange={(event) => {
+                const provider = event.target.value as CloudProvider
+                setCloudProvider(provider)
+                setAwsCredentialType('ACCESS_KEY')
+                setGcpCredentialType('SERVICE_ACCOUNT_KEY')
+                setCloudRegion(
+                  provider === 'AWS' ? 'ap-northeast-2' : 'asia-northeast3',
+                )
+                setCloudDisplayName(
+                  provider === 'AWS'
+                    ? 'AWS Seoul Account'
+                    : 'GCP Seoul Project',
+                )
+              }}
+            >
+              <option value="AWS">AWS</option>
+              <option value="GCP">GCP</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>AWS 인증 방식</span>
+            <select
+              value={awsCredentialType}
+              onChange={(event) =>
+                setAwsCredentialType(event.target.value as AwsCredentialType)
+              }
+              disabled={cloudProvider !== 'AWS'}
+            >
+              <option value="ACCESS_KEY">Access Key</option>
+              <option value="ROLE_ARN">Role ARN</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>GCP 인증 방식</span>
+            <select
+              value={gcpCredentialType}
+              onChange={(event) =>
+                setGcpCredentialType(event.target.value as GcpCredentialType)
+              }
+              disabled={cloudProvider !== 'GCP'}
+            >
+              <option value="SERVICE_ACCOUNT_KEY">Service Account Key JSON</option>
+              <option value="SERVICE_ACCOUNT_EMAIL">Service Account Email</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Display Name</span>
+            <input
+              value={cloudDisplayName}
+              onChange={(event) => setCloudDisplayName(event.target.value)}
+              placeholder="AWS Seoul Account"
+            />
+          </label>
+          <label className="field">
+            <span>Region</span>
+            <input
+              value={cloudRegion}
+              onChange={(event) => setCloudRegion(event.target.value)}
+              placeholder={
+                cloudProvider === 'AWS' ? 'ap-northeast-2' : 'asia-northeast3'
+              }
+            />
+          </label>
+          <label className="field">
+            <span>AWS Account ID</span>
+            <input
+              value={cloudAccountId}
+              onChange={(event) => setCloudAccountId(event.target.value)}
+              placeholder={
+                awsCredentialType === 'ACCESS_KEY'
+                  ? '선택 사항'
+                  : '123456789012'
+              }
+              disabled={cloudProvider !== 'AWS'}
+            />
+          </label>
+          <label className="field span-2">
+            <span>AWS Role ARN</span>
+            <input
+              value={cloudRoleArn}
+              onChange={(event) => setCloudRoleArn(event.target.value)}
+              placeholder="arn:aws:iam::123456789012:role/QeployDeployRole"
+              disabled={cloudProvider !== 'AWS' || awsCredentialType !== 'ROLE_ARN'}
+            />
+          </label>
+          <label className="field">
+            <span>AWS Access Key ID</span>
+            <input
+              value={awsAccessKeyId}
+              onChange={(event) => setAwsAccessKeyId(event.target.value)}
+              placeholder="AKIA..."
+              disabled={cloudProvider !== 'AWS' || awsCredentialType !== 'ACCESS_KEY'}
+            />
+          </label>
+          <label className="field">
+            <span>AWS Secret Access Key</span>
+            <input
+              type="password"
+              value={awsSecretAccessKey}
+              onChange={(event) => setAwsSecretAccessKey(event.target.value)}
+              placeholder="Secret access key"
+              disabled={cloudProvider !== 'AWS' || awsCredentialType !== 'ACCESS_KEY'}
+            />
+          </label>
+          <label className="field span-2">
+            <span>AWS Session Token</span>
+            <input
+              type="password"
+              value={awsSessionToken}
+              onChange={(event) => setAwsSessionToken(event.target.value)}
+              placeholder="임시 키(ASIA...)를 쓸 때만 입력"
+              disabled={cloudProvider !== 'AWS' || awsCredentialType !== 'ACCESS_KEY'}
+            />
+          </label>
+          <label className="field">
+            <span>GCP Project ID</span>
+            <input
+              value={gcpProjectId}
+              onChange={(event) => setGcpProjectId(event.target.value)}
+              placeholder={
+                gcpCredentialType === 'SERVICE_ACCOUNT_KEY'
+                  ? 'JSON에서 자동 추출, 선택 사항'
+                  : 'qeploy-user-project'
+              }
+              disabled={cloudProvider !== 'GCP'}
+            />
+          </label>
+          <label className="field span-2">
+            <span>Service Account Email</span>
+            <input
+              value={serviceAccountEmail}
+              onChange={(event) => setServiceAccountEmail(event.target.value)}
+              placeholder={
+                gcpCredentialType === 'SERVICE_ACCOUNT_KEY'
+                  ? 'JSON에서 자동 추출, 선택 사항'
+                  : 'qeploy-deploy@qeploy-user-project.iam.gserviceaccount.com'
+              }
+              disabled={cloudProvider !== 'GCP'}
+            />
+          </label>
+          <label className="field span-2">
+            <span>Service Account Key JSON</span>
+            <textarea
+              rows={6}
+              value={serviceAccountKeyJson}
+              onChange={(event) => setServiceAccountKeyJson(event.target.value)}
+              placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'
+              disabled={
+                cloudProvider !== 'GCP' ||
+                gcpCredentialType !== 'SERVICE_ACCOUNT_KEY'
+              }
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const result = await runAuthed('cloud.list', (t) =>
+                listCloudConnections(t),
+              )
+              if (!result) return
+              setCloudConnections(result)
+              if (!cloudConnectionId && result[0]) {
+                setCloudConnectionId(String(result[0].cloudConnectionId))
+              }
+            }}
+            disabled={loading['cloud.list']}
+          >
+            {loadingText('cloud.list', 'GET Cloud Connections')}
+          </button>
+          <button
+            type="button"
+            onClick={handleCreateCloudConnection}
+            disabled={loading['cloud.create']}
+          >
+            {loadingText('cloud.create', 'POST Cloud Connection')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (
+                !requireFields('cloud.detail', [
+                  ['Cloud Connection ID', cloudConnectionId],
+                ])
+              ) {
+                return
+              }
+              void runAuthed('cloud.detail', (t) =>
+                getCloudConnection(t, cloudConnectionId),
+              )
+            }}
+            disabled={loading['cloud.detail']}
+          >
+            {loadingText('cloud.detail', 'GET Cloud Connection')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (
+                !requireFields('cloud.health', [
+                  ['Cloud Connection ID', cloudConnectionId],
+                ])
+              ) {
+                return
+              }
+              void runAuthed('cloud.health', (t) =>
+                checkCloudConnectionHealth(t, cloudConnectionId),
+              )
+            }}
+            disabled={loading['cloud.health']}
+          >
+            {loadingText('cloud.health', 'GET Cloud Health')}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              if (
+                !requireFields('cloud.delete', [
+                  ['Cloud Connection ID', cloudConnectionId],
+                ])
+              ) {
+                return
+              }
+              void runAuthed('cloud.delete', (t) =>
+                deleteCloudConnection(t, cloudConnectionId),
+              )
+            }}
+            disabled={loading['cloud.delete']}
+          >
+            {loadingText('cloud.delete', 'DELETE Cloud Connection')}
+          </button>
+        </div>
+
+        {cloudConnections.length > 0 && (
+          <div className="project-list">
+            {cloudConnections.map((connection) => (
+              <button
+                type="button"
+                className={
+                  String(connection.cloudConnectionId) === cloudConnectionId
+                    ? 'project-item selected'
+                    : 'project-item'
+                }
+                key={connection.cloudConnectionId}
+                onClick={() =>
+                  setCloudConnectionId(String(connection.cloudConnectionId))
+                }
+              >
+                <strong>{connection.displayName}</strong>
+                <span>
+                  #{connection.cloudConnectionId} · {connection.provider} ·{' '}
+                  {connection.region} · {connection.status}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <ResponseView label="Cloud Connections Response" value={responses['cloud.list']} />
+        <ResponseView label="Create Cloud Connection Response" value={responses['cloud.create']} />
+        <ResponseView label="Cloud Connection Detail Response" value={responses['cloud.detail']} />
+        <ResponseView label="Cloud Health Response" value={responses['cloud.health']} />
+        <ResponseView label="Delete Cloud Connection Response" value={responses['cloud.delete']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>8. DomainBinding</h2>
             <p className="hint">공통 Project ID와 Domain ID로 도메인 검색, 연결, DNS 가이드, 검증을 테스트합니다.</p>
           </div>
         </div>

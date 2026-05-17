@@ -1,6 +1,6 @@
 # API 테스트 흐름(프론트엔드 콘솔)
 
-이 문서는 `Dvely_FE_test` UI로 인증, 프로젝트, GitHub 레포 선택, 채팅, 배포, DomainBinding API를 수동 테스트하는 흐름입니다.
+이 문서는 `Dvely_FE_test` UI로 인증, 프로젝트, GitHub 레포 선택, 채팅, 배포, CloudConnection, DomainBinding API를 수동 테스트하는 흐름입니다.
 
 ## 전제 조건
 
@@ -119,7 +119,103 @@
 - GitHub Pages 배포는 현재 GitHub Pages 정책상 public repository 조건을 따릅니다.
 - `VERSION` 배포는 입력한 태그가 GitHub 저장소에 존재해야 합니다.
 
-## 7. DomainBinding
+## 7. CloudConnection
+
+CloudConnection은 사용자의 AWS/GCP 계정을 Qeploy에 연결하는 BYOC 테스트입니다.
+
+### AWS Access Key 연결 테스트
+
+1. **Provider**를 `AWS`로 둡니다.
+2. **AWS 인증 방식**을 `Access Key`로 둡니다.
+3. 값을 입력합니다.
+   - Display Name: 예: `AWS Seoul Account`
+   - Region: 예: `ap-northeast-2`
+   - AWS Access Key ID
+   - AWS Secret Access Key
+   - AWS Session Token: 임시 키(`ASIA...`)를 사용할 때만 입력
+   - AWS Account ID: 선택 사항
+4. **POST Cloud Connection**을 클릭합니다.
+5. 응답의 `cloudConnectionId`가 공통 Cloud Connection ID 입력에 자동 반영됩니다.
+6. **GET Cloud Health**를 클릭해 상태를 확인합니다.
+7. 필요하면 **GET Cloud Connections**, **GET Cloud Connection**, **DELETE Cloud Connection**으로 목록/상세/해제를 테스트합니다.
+
+예상:
+- 등록 직후 응답은 `CHECKING` 상태와 `jobId`를 반환합니다.
+- Secret Access Key와 Session Token은 응답에 노출되지 않고 저장 시 AES로 암호화됩니다.
+- 현재 백엔드는 외부 AWS SDK 호출 없이 입력값과 region/key 형식만 검증합니다.
+- health 확인 시 형식이 유효하면 `CONNECTED`, 잘못된 region이면 `REGION_UNSUPPORTED`, 누락/오류 credential이면 `INVALID_CREDENTIAL`이 반환됩니다.
+
+주의:
+- root 계정 Access Key는 사용하지 않습니다.
+- 테스트용 IAM User를 따로 만들고 필요한 권한만 부여한 뒤 사용합니다.
+- 장기 Access Key는 테스트가 끝나면 비활성화하거나 삭제합니다.
+- `AKIA...`로 시작하는 장기 키는 AWS Session Token을 비워둡니다. `ASIA...`로 시작하는 임시 키만 Session Token이 필요합니다.
+- CloudConnection DB 컬럼 변경 후에는 백엔드 서버를 재시작해 Flyway 마이그레이션을 적용합니다.
+
+### AWS Role ARN 연결 테스트
+
+1. **Provider**를 `AWS`로 둡니다.
+2. **AWS 인증 방식**을 `Role ARN`으로 바꿉니다.
+3. 값을 입력합니다.
+   - Display Name: 예: `AWS Seoul Account`
+   - Region: 예: `ap-northeast-2`
+   - AWS Account ID: 12자리 계정 ID
+   - AWS Role ARN: 예: `arn:aws:iam::123456789012:role/QeployDeployRole`
+4. **POST Cloud Connection**을 클릭합니다.
+5. **GET Cloud Health**로 상태를 확인합니다.
+
+### GCP Service Account Key JSON 연결 테스트
+
+1. **Provider**를 `GCP`로 변경합니다.
+2. **GCP 인증 방식**을 `Service Account Key JSON`으로 둡니다.
+3. 로컬에서 `gcloud` CLI로 서비스 계정과 key JSON을 준비합니다.
+
+   ```bash
+   gcloud auth login
+   gcloud config set project qeploy-user-project
+   gcloud iam service-accounts create qeploy-deploy \
+     --display-name="Qeploy Deploy"
+   gcloud projects add-iam-policy-binding qeploy-user-project \
+     --member="serviceAccount:qeploy-deploy@qeploy-user-project.iam.gserviceaccount.com" \
+     --role="roles/editor"
+   gcloud iam service-accounts keys create ./qeploy-service-account.json \
+     --iam-account="qeploy-deploy@qeploy-user-project.iam.gserviceaccount.com"
+   ```
+
+4. `qeploy-service-account.json` 파일 내용을 복사해 **Service Account Key JSON**에 붙여넣습니다.
+5. 값을 입력합니다.
+   - Display Name: 예: `GCP Seoul Project`
+   - Region: 예: `asia-northeast3`
+   - GCP Project ID: JSON의 `project_id`에서 자동 추출되므로 선택 사항
+   - Service Account Email: JSON의 `client_email`에서 자동 추출되므로 선택 사항
+6. **POST Cloud Connection**을 클릭합니다.
+7. **GET Cloud Health**로 상태를 확인합니다.
+
+예상:
+- Service Account Key JSON의 `project_id`, `client_email`, `private_key` 형식을 검증합니다.
+- Service Account Key JSON은 응답에 노출되지 않고 저장 시 AES로 암호화됩니다.
+- 현재 백엔드는 외부 GCP SDK 호출 없이 입력값과 region/key JSON 형식만 검증합니다.
+
+### GCP Service Account Email 연결 테스트
+
+1. **Provider**를 `GCP`로 변경합니다.
+2. **GCP 인증 방식**을 `Service Account Email`로 바꿉니다.
+3. 값을 입력합니다.
+   - Display Name: 예: `GCP Seoul Project`
+   - Region: 예: `asia-northeast3`
+   - GCP Project ID: 예: `qeploy-user-project`
+   - Service Account Email: 예: `qeploy-deploy@qeploy-user-project.iam.gserviceaccount.com`
+4. **POST Cloud Connection**을 클릭합니다.
+5. **GET Cloud Health**로 상태를 확인합니다.
+
+주의:
+- `roles/editor`는 테스트 편의용 예시입니다. 실제 운영에서는 배포에 필요한 최소 권한만 부여해야 합니다.
+- 테스트가 끝나면 생성한 service account key를 삭제하거나 비활성화합니다.
+- `projectId`와 service account email의 프로젝트 ID는 일치해야 합니다.
+- 이 API는 Qeploy와 클라우드 계정 간 연결 정보만 삭제하며, 실제 클라우드 리소스를 삭제하지 않습니다.
+- 실제 AWS AssumeRole, GCP IAM/Billing 확인은 외부 연동 단계에서 확장할 예정입니다.
+
+## 8. DomainBinding
 
 DomainBinding은 도메인 검색, 프로젝트 도메인 목록, 도메인 연결, DNS 가이드, DNS 검증, 연결 해제를 테스트합니다.
 
