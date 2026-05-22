@@ -47,6 +47,12 @@ import {
   checkVerification,
   deleteDomain,
 } from './api/domainbinding'
+import {
+  submitDecision,
+  getTaskStatus,
+  submitTaskInput,
+  closeAgentSession,
+} from './api/agent'
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
 import type {
@@ -61,6 +67,7 @@ import type {
   DomainType,
   VerificationMethod,
 } from './types/domainbinding'
+import type { AiProvider } from './types/agent'
 import './App.css'
 
 const AUTH_STEP_MESSAGES: Partial<Record<AuthStep, string>> = {
@@ -147,6 +154,11 @@ export default function App() {
   const [verificationMethod, setVerificationMethod] =
     useState<VerificationMethod>('CNAME')
   const [domains, setDomains] = useState<DomainResponse[]>([])
+
+  const [agentContent, setAgentContent] = useState('')
+  const [agentProvider, setAgentProvider] = useState<AiProvider>('ANTHROPIC')
+  const [agentTaskId, setAgentTaskId] = useState('')
+  const [agentInputValue, setAgentInputValue] = useState('')
 
   const selectedImportRepository = useMemo(
     () =>
@@ -1428,6 +1440,120 @@ export default function App() {
         <ResponseView label="Verification Guide Response" value={responses['domain.guide']} />
         <ResponseView label="Verification Check Response" value={responses['domain.check']} />
         <ResponseView label="Delete Domain Response" value={responses['domain.delete']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>7. Agent</h2>
+            <p className="hint">자연어 요청을 제출하면 taskId를 받아 폴링으로 상태를 확인합니다. WAITING_INPUT이면 질문에 응답하세요.</p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field span-2">
+            <span>요청 내용 (content)</span>
+            <textarea
+              rows={3}
+              value={agentContent}
+              onChange={(event) => setAgentContent(event.target.value)}
+              placeholder="React로 투두 앱을 만들고 GitHub Pages에 배포해줘"
+            />
+          </label>
+          <label className="field">
+            <span>AI Provider</span>
+            <select
+              value={agentProvider}
+              onChange={(event) => setAgentProvider(event.target.value as AiProvider)}
+            >
+              <option value="ANTHROPIC">ANTHROPIC (Claude)</option>
+              <option value="OPENAI">OPENAI (GPT)</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Task ID</span>
+            <input
+              value={agentTaskId}
+              onChange={(event) => setAgentTaskId(event.target.value)}
+              placeholder="요청 제출 후 자동 입력"
+            />
+          </label>
+          <label className="field span-2">
+            <span>사용자 입력값 (WAITING_INPUT 상태일 때)</span>
+            <input
+              value={agentInputValue}
+              onChange={(event) => setAgentInputValue(event.target.value)}
+              placeholder="에이전트 질문에 대한 응답. 예: my-react-app"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'agent.decision'
+              if (!requireFields(key, [['요청 내용', agentContent]])) return
+              const result = await runAuthed(key, (t) =>
+                submitDecision(t, {
+                  content: agentContent.trim(),
+                  aiProvider: agentProvider,
+                  projectId: projectId ? Number(projectId) : null,
+                }),
+              )
+              if (result?.taskId) {
+                setAgentTaskId(result.taskId)
+              }
+            }}
+            disabled={loading['agent.decision']}
+          >
+            {loadingText('agent.decision', 'POST Decision')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('agent.status', [['Task ID', agentTaskId]])) return
+              void runAuthed('agent.status', (t) => getTaskStatus(t, agentTaskId))
+            }}
+            disabled={loading['agent.status']}
+          >
+            {loadingText('agent.status', 'GET Task Status')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const key = 'agent.input'
+              if (
+                !requireFields(key, [
+                  ['Task ID', agentTaskId],
+                  ['입력값', agentInputValue],
+                ])
+              ) {
+                return
+              }
+              void runAuthed(key, (t) =>
+                submitTaskInput(t, agentTaskId, { value: agentInputValue.trim() }),
+              )
+            }}
+            disabled={loading['agent.input']}
+          >
+            {loadingText('agent.input', 'POST Task Input')}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => void runAuthed('agent.session.close', (t) => closeAgentSession(t))}
+            disabled={loading['agent.session.close']}
+          >
+            {loadingText('agent.session.close', 'DELETE Session')}
+          </button>
+        </div>
+
+        <ResponseView label="Decision Response" value={responses['agent.decision']} />
+        <ResponseView label="Task Status Response" value={responses['agent.status']} />
+        <ResponseView label="Task Input Response" value={responses['agent.input']} />
+        <ResponseView label="Close Session Response" value={responses['agent.session.close']} />
       </section>
     </div>
   )
