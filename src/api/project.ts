@@ -1,9 +1,11 @@
 import { request } from './http'
 import type {
+  ConnectProjectRepositoryPayload,
   CreateProjectPayload,
   UpdateProjectPayload,
   GithubRepositoryResponse,
   ProjectCreateResponse,
+  ProjectRepositoryResponse,
   ProjectSummaryResponse,
   ProjectDetailResponse,
   ProjectOverviewResponse,
@@ -22,6 +24,19 @@ export function listGithubRepositories(token: string) {
 export function createProject(token: string, payload: CreateProjectPayload) {
   return request<ProjectCreateResponse>({
     path: '/api/v1/projects',
+    method: 'POST',
+    token,
+    body: payload,
+  })
+}
+
+export function connectProjectRepository(
+  token: string,
+  projectId: string,
+  payload: ConnectProjectRepositoryPayload,
+) {
+  return request<ProjectRepositoryResponse>({
+    path: `/api/v1/projects/${projectId}/repository`,
     method: 'POST',
     token,
     body: payload,
