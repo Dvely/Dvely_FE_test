@@ -4,11 +4,27 @@ import type {
   CloudConnectionResponse,
   CreateCloudConnectionPayload,
   CreateCloudConnectionResponse,
+  CloudConnectionVerificationJobResponse,
 } from '../types/cloudconnection'
 
 export function listCloudConnections(token: string) {
   return request<CloudConnectionResponse[]>({
     path: '/api/v1/cloud-connections',
+    token,
+  })
+}
+
+export function requestCloudConnectionVerification(token: string, cloudConnectionId: string) {
+  return request<CloudConnectionVerificationJobResponse>({
+    path: `/api/v1/cloud-connections/${cloudConnectionId}/verification-jobs`,
+    method: 'POST',
+    token,
+  })
+}
+
+export function getCloudConnectionVerificationJob(token: string, jobId: string) {
+  return request<CloudConnectionVerificationJobResponse>({
+    path: `/api/v1/cloud-connection-verification-jobs/${jobId}`,
     token,
   })
 }

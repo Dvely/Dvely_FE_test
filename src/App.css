@@ -116,6 +116,21 @@
   font-weight: 650;
 }
 
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #c9d1cd;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.checkbox-field input {
+  width: auto;
+  margin: 0;
+}
+
 .field input,
 .field select,
 .field textarea {

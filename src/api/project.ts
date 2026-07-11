@@ -12,6 +12,8 @@ import type {
   ProjectActivityLogResponse,
   ProjectCommitResponse,
   RepositoryHealthResponse,
+  ProjectChatSettingsResponse,
+  ProjectInfrastructureSettingsResponse,
 } from '../types/project'
 
 export function listGithubRepositories(token: string) {
@@ -104,6 +106,54 @@ export function getProjectCommits(token: string, projectId: string) {
 export function getRepositoryHealth(token: string, projectId: string) {
   return request<RepositoryHealthResponse>({
     path: `/api/v1/projects/${projectId}/repository-health`,
+    token,
+  })
+}
+
+export function getProjectChatSettings(token: string, projectId: string) {
+  return request<ProjectChatSettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/chat`,
+    token,
+  })
+}
+
+export function updateProjectChatSettings(
+  token: string,
+  projectId: string,
+  payload: Omit<ProjectChatSettingsResponse, 'projectId'>,
+) {
+  return request<ProjectChatSettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/chat`,
+    method: 'PATCH',
+    token,
+    body: payload,
+  })
+}
+
+export function getProjectInfrastructureSettings(token: string, projectId: string) {
+  return request<ProjectInfrastructureSettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/infrastructure`,
+    token,
+  })
+}
+
+export function updateProjectInfrastructureSettings(
+  token: string,
+  projectId: string,
+  cloudConnectionId: number,
+) {
+  return request<ProjectInfrastructureSettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/infrastructure`,
+    method: 'PUT',
+    token,
+    body: { cloudConnectionId },
+  })
+}
+
+export function clearProjectInfrastructureSettings(token: string, projectId: string) {
+  return request<void>({
+    path: `/api/v1/projects/${projectId}/settings/infrastructure`,
+    method: 'DELETE',
     token,
   })
 }

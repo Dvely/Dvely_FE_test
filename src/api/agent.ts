@@ -4,6 +4,7 @@ import type {
   DecisionResponse,
   TaskStatusResponse,
   TaskInputPayload,
+  AgentTaskEventResponse,
 } from '../types/agent'
 
 export function submitDecision(token: string, payload: DecisionPayload) {
@@ -12,6 +13,16 @@ export function submitDecision(token: string, payload: DecisionPayload) {
     method: 'POST',
     token,
     body: payload,
+  })
+}
+
+export function getTaskEvents(token: string, taskId: string, afterEventId: string) {
+  const query = afterEventId.trim()
+    ? `?afterEventId=${encodeURIComponent(afterEventId)}`
+    : ''
+  return request<AgentTaskEventResponse[]>({
+    path: `/api/v1/agent/tasks/${taskId}/events${query}`,
+    token,
   })
 }
 
@@ -35,6 +46,22 @@ export function closeAgentSession(token: string) {
   return request<null>({
     path: '/api/v1/agent/session',
     method: 'DELETE',
+    token,
+  })
+}
+
+export function cancelTask(token: string, taskId: string) {
+  return request<void>({
+    path: `/api/v1/agent/tasks/${taskId}`,
+    method: 'DELETE',
+    token,
+  })
+}
+
+export function retryTask(token: string, taskId: string) {
+  return request<void>({
+    path: `/api/v1/agent/tasks/${taskId}/retry`,
+    method: 'POST',
     token,
   })
 }

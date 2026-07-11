@@ -3,7 +3,9 @@ import {
   getGithubLoginUrl,
   handleGithubCallback,
   getGithubAppInstallUrl,
-  handleGithubAppCallback,
+  getGithubAppReauthorizeUrl,
+  refreshAccessToken,
+  logout,
 } from './api/auth'
 import { API_BASE } from './api/http'
 import { getMe } from './api/user'
@@ -19,6 +21,11 @@ import {
   getProjectActivityLogs,
   getProjectCommits,
   getRepositoryHealth,
+  getProjectChatSettings,
+  updateProjectChatSettings,
+  getProjectInfrastructureSettings,
+  updateProjectInfrastructureSettings,
+  clearProjectInfrastructureSettings,
 } from './api/project'
 import {
   listConversations,
@@ -27,6 +34,7 @@ import {
   deleteConversation,
   listTrashConversations,
   restoreConversation,
+  permanentlyDeleteConversation,
   listMessages,
   sendMessage,
 } from './api/chat'
@@ -53,6 +61,8 @@ import {
   createCloudConnection,
   getCloudConnection,
   checkCloudConnectionHealth,
+  requestCloudConnectionVerification,
+  getCloudConnectionVerificationJob,
   deleteCloudConnection,
 } from './api/cloudconnection'
 import {
@@ -60,7 +70,13 @@ import {
   getTaskStatus,
   submitTaskInput,
   closeAgentSession,
+  getTaskEvents,
+  cancelTask,
+  retryTask,
 } from './api/agent'
+import { listProjectApprovals, getApproval, approve, reject } from './api/approval'
+import { listProjectChanges, getChange, getChangeDiff } from './api/change'
+import { closePreviewSession } from './api/preview'
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
 import type {
@@ -68,6 +84,7 @@ import type {
   ProjectCreateResponse,
   ProjectRepositoryResponse,
   ProjectSummaryResponse,
+  ProjectChatSettingsResponse,
 } from './types/project'
 import type { ConversationResponse } from './types/chat'
 import type { DeployTargetType, VersionResponse } from './types/deployment'
@@ -130,6 +147,7 @@ export default function App() {
   const [authStep, setAuthStep] = useState<AuthStep>('idle')
   const [authError, setAuthError] = useState('')
   const [token, setToken] = useState(tokenStorage.get() ?? '')
+  const [refreshToken, setRefreshToken] = useState('')
   const [responses, setResponses] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState<Record<string, boolean>>({})
 
@@ -162,6 +180,7 @@ export default function App() {
   const [versions, setVersions] = useState<VersionResponse[]>([])
 
   const [cloudConnectionId, setCloudConnectionId] = useState('')
+  const [cloudVerificationJobId, setCloudVerificationJobId] = useState('')
   const [cloudProvider, setCloudProvider] = useState<CloudProvider>('AWS')
   const [awsCredentialType, setAwsCredentialType] =
     useState<AwsCredentialType>('ACCESS_KEY')
@@ -194,6 +213,16 @@ export default function App() {
   const [agentProvider, setAgentProvider] = useState<AiProvider>('ANTHROPIC')
   const [agentTaskId, setAgentTaskId] = useState('')
   const [agentInputValue, setAgentInputValue] = useState('')
+  const [agentAfterEventId, setAgentAfterEventId] = useState('')
+  const [approvalId, setApprovalId] = useState('')
+  const [changeId, setChangeId] = useState('')
+  const [previewSessionId, setPreviewSessionId] = useState('')
+  const [chatSettings, setChatSettings] = useState<Omit<ProjectChatSettingsResponse, 'projectId'>>({
+    changeApprovalRequired: true,
+    deploymentApprovalRequired: true,
+    domainApprovalRequired: true,
+    infraApprovalRequired: true,
+  })
 
   const selectedImportRepository = useMemo(
     () =>
@@ -213,28 +242,17 @@ export default function App() {
   }, [token])
 
   useEffect(() => {
-    if (window.location.pathname !== '/app/callback') return
+    if (window.location.pathname !== '/auth/app-callback') return
 
     const params = new URLSearchParams(window.location.search)
-    const installation_id = params.get('installation_id') ?? ''
-    const setup_action = params.get('setup_action') ?? 'install'
-    const state = params.get('state') ?? ''
-
-    setAuthStep('callback')
-    setAuthError('')
-
-    handleGithubAppCallback({ installation_id, setup_action, state })
-      .then(() => setAuthStep('done'))
-      .catch((err: unknown) => {
-        setAuthStep('error')
-        setAuthError(
-          err instanceof Error ? err.message : 'GitHub App callback failed.',
-        )
-      })
+    const linked = params.get('githubAppLinked') === 'true'
+    setAuthStep(linked ? 'done' : 'error')
+    setAuthError(linked ? '' : params.get('error') ?? 'GitHub App 연동에 실패했습니다.')
+    window.history.replaceState({}, '', '/')
   }, [])
 
   useEffect(() => {
-    if (window.location.pathname === '/app/callback') return
+    if (window.location.pathname === '/auth/app-callback') return
 
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
@@ -247,8 +265,9 @@ export default function App() {
     setAuthError('')
 
     handleGithubCallback({ code, state })
-      .then(async ({ accessToken, githubAppInstalled }) => {
+      .then(async ({ accessToken, refreshToken: newRefreshToken, githubAppInstalled }) => {
         setToken(accessToken)
+        setRefreshToken(newRefreshToken)
 
         if (!githubAppInstalled) {
           setAuthStep('install')
@@ -406,6 +425,12 @@ export default function App() {
 
     if (created?.projectId) {
       setProjectId(String(created.projectId))
+    }
+    if (created?.taskId) {
+      setAgentTaskId(created.taskId)
+    }
+    if (created?.approvalIds?.[0]) {
+      setApprovalId(String(created.approvalIds[0]))
     }
   }
 
@@ -569,9 +594,28 @@ export default function App() {
               onClick={handleRefreshGithubApp}
               disabled={authStep === 'install'}
             >
-              GitHub App 권한 갱신
+              GitHub App 설치
             </button>
-            <button type="button" className="secondary" onClick={() => setToken('')}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                if (!token.trim()) {
+                  setResponse('auth.reauthorize', 'ERROR: access token is required.')
+                  return
+                }
+                void run('auth.reauthorize', async () => {
+                  const { url } = await getGithubAppReauthorizeUrl(token.trim())
+                  window.location.href = url
+                })
+              }}
+            >
+              GitHub App 재인증
+            </button>
+            <button type="button" className="secondary" onClick={() => {
+              setToken('')
+              setRefreshToken('')
+            }}>
               토큰 지우기
             </button>
           </div>
@@ -584,6 +628,15 @@ export default function App() {
               value={token}
               onChange={(event) => setToken(event.target.value)}
               placeholder="로그인 후 자동 입력되거나 직접 붙여넣기"
+            />
+          </label>
+          <label className="field span-2">
+            <span>Refresh Token</span>
+            <input
+              type="password"
+              value={refreshToken}
+              onChange={(event) => setRefreshToken(event.target.value)}
+              placeholder="GitHub 로그인 응답에서 자동 입력됩니다. Access Token 재발급 테스트에 사용합니다."
             />
           </label>
           <label className="field">
@@ -613,12 +666,48 @@ export default function App() {
           >
             {loadingText('user.me', 'GET /users/me')}
           </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              if (!requireFields('auth.refresh', [['Refresh Token', refreshToken]])) return
+              const result = await run('auth.refresh', () => refreshAccessToken(refreshToken.trim()))
+              if (result) {
+                setToken(result.accessToken)
+                setRefreshToken(result.refreshToken)
+              }
+            }}
+            disabled={loading['auth.refresh']}
+          >
+            {loadingText('auth.refresh', 'POST Token Refresh')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const currentToken = token.trim()
+              if (!currentToken) {
+                setResponse('auth.logout', 'ERROR: access token is required.')
+                return
+              }
+              const result = await run('auth.logout', () => logout(currentToken))
+              if (result !== undefined) {
+                setToken('')
+                setRefreshToken('')
+              }
+            }}
+            disabled={loading['auth.logout']}
+          >
+            {loadingText('auth.logout', 'DELETE Logout')}
+          </button>
           {authMessage && <p className="status">{authMessage}</p>}
           {authStep === 'error' && authError && (
             <p className="status error">{authError}</p>
           )}
         </div>
         <ResponseView label="User Response" value={responses['user.me']} />
+        <ResponseView label="Token Refresh Response" value={responses['auth.refresh']} />
+        <ResponseView label="Logout Response" value={responses['auth.logout']} />
       </section>
 
       <section className="panel">
@@ -1133,6 +1222,19 @@ export default function App() {
           </button>
           <button
             type="button"
+            className="danger"
+            onClick={() => {
+              if (!requireFields('chat.trash.delete', [['Conversation ID', conversationId]])) return
+              void runAuthed('chat.trash.delete', (t) =>
+                permanentlyDeleteConversation(t, conversationId),
+              )
+            }}
+            disabled={loading['chat.trash.delete']}
+          >
+            {loadingText('chat.trash.delete', 'Permanently Delete')}
+          </button>
+          <button
+            type="button"
             className="secondary"
             onClick={() => {
               if (
@@ -1194,6 +1296,7 @@ export default function App() {
           label="Trash Restore Response"
           value={responses['chat.trash.restore']}
         />
+        <ResponseView label="Trash Permanent Delete Response" value={responses['chat.trash.delete']} />
         <ResponseView
           label="Message List Response"
           value={responses['chat.messages.list']}
@@ -1404,6 +1507,14 @@ export default function App() {
               value={cloudConnectionId}
               onChange={(event) => setCloudConnectionId(event.target.value)}
               placeholder="등록 후 자동 입력"
+            />
+          </label>
+          <label className="field">
+            <span>Verification Job ID</span>
+            <input
+              value={cloudVerificationJobId}
+              onChange={(event) => setCloudVerificationJobId(event.target.value)}
+              placeholder="재검증 요청 후 자동 입력"
             />
           </label>
           <label className="field">
@@ -1630,6 +1741,34 @@ export default function App() {
           </button>
           <button
             type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'cloud.verification.request'
+              if (!requireFields(key, [['Cloud Connection ID', cloudConnectionId]])) return
+              const result = await runAuthed(key, (t) =>
+                requestCloudConnectionVerification(t, cloudConnectionId),
+              )
+              if (result?.jobId) setCloudVerificationJobId(result.jobId)
+            }}
+            disabled={loading['cloud.verification.request']}
+          >
+            {loadingText('cloud.verification.request', 'POST Reverify')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('cloud.verification.get', [['Verification Job ID', cloudVerificationJobId]])) return
+              void runAuthed('cloud.verification.get', (t) =>
+                getCloudConnectionVerificationJob(t, cloudVerificationJobId),
+              )
+            }}
+            disabled={loading['cloud.verification.get']}
+          >
+            {loadingText('cloud.verification.get', 'GET Verification Job')}
+          </button>
+          <button
+            type="button"
             className="danger"
             onClick={() => {
               if (
@@ -1678,6 +1817,8 @@ export default function App() {
         <ResponseView label="Create Cloud Connection Response" value={responses['cloud.create']} />
         <ResponseView label="Cloud Connection Detail Response" value={responses['cloud.detail']} />
         <ResponseView label="Cloud Health Response" value={responses['cloud.health']} />
+        <ResponseView label="Cloud Reverification Response" value={responses['cloud.verification.request']} />
+        <ResponseView label="Cloud Verification Job Response" value={responses['cloud.verification.get']} />
         <ResponseView label="Delete Cloud Connection Response" value={responses['cloud.delete']} />
       </section>
 
@@ -1913,7 +2054,81 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>7. Agent</h2>
+            <h2>9. 프로젝트 승인·인프라 설정</h2>
+            <p className="hint">프로젝트별 승인 정책과 CONNECTED Cloud Connection 선택을 최신 설정 API로 검증합니다.</p>
+          </div>
+        </div>
+        <div className="fields-grid">
+          <label className="field checkbox-field"><input type="checkbox" checked={chatSettings.changeApprovalRequired} onChange={(event) => setChatSettings((value) => ({ ...value, changeApprovalRequired: event.target.checked }))} /><span>Change 승인 필요</span></label>
+          <label className="field checkbox-field"><input type="checkbox" checked={chatSettings.deploymentApprovalRequired} onChange={(event) => setChatSettings((value) => ({ ...value, deploymentApprovalRequired: event.target.checked }))} /><span>Deployment 승인 필요</span></label>
+          <label className="field checkbox-field"><input type="checkbox" checked={chatSettings.domainApprovalRequired} onChange={(event) => setChatSettings((value) => ({ ...value, domainApprovalRequired: event.target.checked }))} /><span>Domain 승인 필요</span></label>
+          <label className="field checkbox-field"><input type="checkbox" checked={chatSettings.infraApprovalRequired} onChange={(event) => setChatSettings((value) => ({ ...value, infraApprovalRequired: event.target.checked }))} /><span>Infra 승인 필요</span></label>
+        </div>
+        <div className="button-grid">
+          <button type="button" className="secondary" onClick={async () => {
+            if (!requireFields('project.settings.chat.get', [['Project ID', projectId]])) return
+            const result = await runAuthed('project.settings.chat.get', (t) => getProjectChatSettings(t, projectId))
+            if (result) {
+              setChatSettings({
+                changeApprovalRequired: result.changeApprovalRequired,
+                deploymentApprovalRequired: result.deploymentApprovalRequired,
+                domainApprovalRequired: result.domainApprovalRequired,
+                infraApprovalRequired: result.infraApprovalRequired,
+              })
+            }
+          }} disabled={loading['project.settings.chat.get']}>{loadingText('project.settings.chat.get', 'GET Chat Settings')}</button>
+          <button type="button" onClick={() => {
+            if (!requireFields('project.settings.chat.update', [['Project ID', projectId]])) return
+            void runAuthed('project.settings.chat.update', (t) => updateProjectChatSettings(t, projectId, chatSettings))
+          }} disabled={loading['project.settings.chat.update']}>{loadingText('project.settings.chat.update', 'PATCH Chat Settings')}</button>
+          <button type="button" className="secondary" onClick={() => {
+            if (!requireFields('project.settings.infrastructure.get', [['Project ID', projectId]])) return
+            void runAuthed('project.settings.infrastructure.get', (t) => getProjectInfrastructureSettings(t, projectId))
+          }} disabled={loading['project.settings.infrastructure.get']}>{loadingText('project.settings.infrastructure.get', 'GET Infrastructure')}</button>
+          <button type="button" onClick={() => {
+            if (!requireFields('project.settings.infrastructure.update', [['Project ID', projectId], ['Cloud Connection ID', cloudConnectionId]])) return
+            void runAuthed('project.settings.infrastructure.update', (t) => updateProjectInfrastructureSettings(t, projectId, Number(cloudConnectionId)))
+          }} disabled={loading['project.settings.infrastructure.update']}>{loadingText('project.settings.infrastructure.update', 'PUT Cloud Selection')}</button>
+          <button type="button" className="danger" onClick={() => {
+            if (!requireFields('project.settings.infrastructure.clear', [['Project ID', projectId]])) return
+            void runAuthed('project.settings.infrastructure.clear', (t) => clearProjectInfrastructureSettings(t, projectId))
+          }} disabled={loading['project.settings.infrastructure.clear']}>{loadingText('project.settings.infrastructure.clear', 'DELETE Cloud Selection')}</button>
+        </div>
+        <ResponseView label="Chat Settings Response" value={responses['project.settings.chat.get'] ?? responses['project.settings.chat.update']} />
+        <ResponseView label="Infrastructure Settings Response" value={responses['project.settings.infrastructure.get'] ?? responses['project.settings.infrastructure.update'] ?? responses['project.settings.infrastructure.clear']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>10. Approval · Change · Preview</h2>
+            <p className="hint">Agent가 만든 승인과 Change 기록을 조회·결정하고, 생성된 Preview Session을 종료합니다.</p>
+          </div>
+        </div>
+        <div className="fields-grid">
+          <label className="field"><span>Approval ID</span><input value={approvalId} onChange={(event) => setApprovalId(event.target.value)} placeholder="Decision/Create Project 응답에서 자동 입력" /></label>
+          <label className="field"><span>Change ID</span><input value={changeId} onChange={(event) => setChangeId(event.target.value)} placeholder="Change 목록에서 확인" /></label>
+          <label className="field"><span>Preview Session ID</span><input value={previewSessionId} onChange={(event) => setPreviewSessionId(event.target.value)} placeholder="Change의 previewSessionId" /></label>
+        </div>
+        <div className="button-grid">
+          <button type="button" className="secondary" onClick={() => { if (!requireFields('approval.list', [['Project ID', projectId]])) return; void runAuthed('approval.list', (t) => listProjectApprovals(t, projectId)) }} disabled={loading['approval.list']}>{loadingText('approval.list', 'GET Project Approvals')}</button>
+          <button type="button" className="secondary" onClick={() => { if (!requireFields('approval.get', [['Approval ID', approvalId]])) return; void runAuthed('approval.get', (t) => getApproval(t, approvalId)) }} disabled={loading['approval.get']}>{loadingText('approval.get', 'GET Approval')}</button>
+          <button type="button" onClick={() => { if (!requireFields('approval.approve', [['Approval ID', approvalId]])) return; void runAuthed('approval.approve', (t) => approve(t, approvalId)) }} disabled={loading['approval.approve']}>{loadingText('approval.approve', 'POST Approve')}</button>
+          <button type="button" className="danger" onClick={() => { if (!requireFields('approval.reject', [['Approval ID', approvalId]])) return; void runAuthed('approval.reject', (t) => reject(t, approvalId)) }} disabled={loading['approval.reject']}>{loadingText('approval.reject', 'POST Reject')}</button>
+          <button type="button" className="secondary" onClick={() => { if (!requireFields('change.list', [['Project ID', projectId]])) return; void runAuthed('change.list', (t) => listProjectChanges(t, projectId)) }} disabled={loading['change.list']}>{loadingText('change.list', 'GET Project Changes')}</button>
+          <button type="button" className="secondary" onClick={() => { if (!requireFields('change.get', [['Change ID', changeId]])) return; void runAuthed('change.get', (t) => getChange(t, changeId)) }} disabled={loading['change.get']}>{loadingText('change.get', 'GET Change')}</button>
+          <button type="button" className="secondary" onClick={() => { if (!requireFields('change.diff', [['Change ID', changeId]])) return; void runAuthed('change.diff', (t) => getChangeDiff(t, changeId)) }} disabled={loading['change.diff']}>{loadingText('change.diff', 'GET Change Diff')}</button>
+          <button type="button" className="danger" onClick={() => { if (!requireFields('preview.close', [['Preview Session ID', previewSessionId]])) return; void runAuthed('preview.close', (t) => closePreviewSession(t, previewSessionId)) }} disabled={loading['preview.close']}>{loadingText('preview.close', 'DELETE Preview Session')}</button>
+        </div>
+        <ResponseView label="Approvals Response" value={responses['approval.list'] ?? responses['approval.get'] ?? responses['approval.approve'] ?? responses['approval.reject']} />
+        <ResponseView label="Changes Response" value={responses['change.list'] ?? responses['change.get'] ?? responses['change.diff']} />
+        <ResponseView label="Preview Close Response" value={responses['preview.close']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>11. Agent</h2>
             <p className="hint">자연어 요청을 제출하면 taskId를 받아 폴링으로 상태를 확인합니다. WAITING_INPUT이면 질문에 응답하세요.</p>
           </div>
         </div>
@@ -1946,6 +2161,14 @@ export default function App() {
               placeholder="요청 제출 후 자동 입력"
             />
           </label>
+          <label className="field">
+            <span>After Event ID</span>
+            <input
+              value={agentAfterEventId}
+              onChange={(event) => setAgentAfterEventId(event.target.value)}
+              placeholder="0 또는 마지막 eventId"
+            />
+          </label>
           <label className="field span-2">
             <span>사용자 입력값 (WAITING_INPUT 상태일 때)</span>
             <input
@@ -1967,10 +2190,14 @@ export default function App() {
                   content: agentContent.trim(),
                   aiProvider: agentProvider,
                   projectId: projectId ? Number(projectId) : null,
+                  conversationId: conversationId ? Number(conversationId) : null,
                 }),
               )
               if (result?.taskId) {
                 setAgentTaskId(result.taskId)
+              }
+              if (result?.approvalIds?.[0]) {
+                setApprovalId(String(result.approvalIds[0]))
               }
             }}
             disabled={loading['agent.decision']}
@@ -1987,6 +2214,17 @@ export default function App() {
             disabled={loading['agent.status']}
           >
             {loadingText('agent.status', 'GET Task Status')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('agent.events', [['Task ID', agentTaskId]])) return
+              void runAuthed('agent.events', (t) => getTaskEvents(t, agentTaskId, agentAfterEventId))
+            }}
+            disabled={loading['agent.events']}
+          >
+            {loadingText('agent.events', 'GET Task Events')}
           </button>
           <button
             type="button"
@@ -2011,6 +2249,28 @@ export default function App() {
           <button
             type="button"
             className="danger"
+            onClick={() => {
+              if (!requireFields('agent.cancel', [['Task ID', agentTaskId]])) return
+              void runAuthed('agent.cancel', (t) => cancelTask(t, agentTaskId))
+            }}
+            disabled={loading['agent.cancel']}
+          >
+            {loadingText('agent.cancel', 'DELETE Task')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (!requireFields('agent.retry', [['Task ID', agentTaskId]])) return
+              void runAuthed('agent.retry', (t) => retryTask(t, agentTaskId))
+            }}
+            disabled={loading['agent.retry']}
+          >
+            {loadingText('agent.retry', 'POST Retry Task')}
+          </button>
+          <button
+            type="button"
+            className="danger"
             onClick={() => void runAuthed('agent.session.close', (t) => closeAgentSession(t))}
             disabled={loading['agent.session.close']}
           >
@@ -2020,7 +2280,10 @@ export default function App() {
 
         <ResponseView label="Decision Response" value={responses['agent.decision']} />
         <ResponseView label="Task Status Response" value={responses['agent.status']} />
+        <ResponseView label="Task Events Response" value={responses['agent.events']} />
         <ResponseView label="Task Input Response" value={responses['agent.input']} />
+        <ResponseView label="Task Cancel Response" value={responses['agent.cancel']} />
+        <ResponseView label="Task Retry Response" value={responses['agent.retry']} />
         <ResponseView label="Close Session Response" value={responses['agent.session.close']} />
       </section>
     </div>

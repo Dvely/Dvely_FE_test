@@ -64,3 +64,15 @@ export interface CloudConnectionHealthResponse {
   message: string
   checkedAt: string
 }
+
+export interface CloudConnectionVerificationJobResponse {
+  jobId: string
+  cloudConnectionId: number
+  status: string
+  connectionStatus: CloudConnectionStatus
+  message: string | null
+  attempt: number
+  createdAt: string
+  startedAt: string | null
+  completedAt: string | null
+}

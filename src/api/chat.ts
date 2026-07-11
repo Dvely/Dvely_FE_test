@@ -50,6 +50,14 @@ export function restoreConversation(token: string, conversationId: string) {
   })
 }
 
+export function permanentlyDeleteConversation(token: string, conversationId: string) {
+  return request<void>({
+    path: `/api/v1/trash/conversations/${conversationId}`,
+    method: 'DELETE',
+    token,
+  })
+}
+
 export function listMessages(token: string, conversationId: string) {
   return request<MessageResponse[]>({
     path: `/api/v1/conversations/${conversationId}/messages`,

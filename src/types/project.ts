@@ -20,6 +20,9 @@ export interface ProjectCreateResponse {
   projectId: number
   name: string
   status: string
+  taskId: string
+  taskStatus: string
+  approvalIds: number[]
 }
 
 export interface GithubRepositoryResponse {
@@ -64,11 +67,13 @@ export interface ProjectOverviewResponse {
   currentUrl: string | null
   deployStatus: string
   currentVersion: string | null
-  recentChanges: string[]
+  repositoryVersion: string | null
+  recentChanges: ProjectActivityLogResponse[]
   latestCommit: ProjectCommitResponse | null
-  trafficSummary: string | null
   repositoryHealth: RepositoryHealthResponse | null
-  domainSummary: string | null
+  domainSummary: ProjectDomainSummaryResponse | null
+  cloudSummary: ProjectCloudSummaryResponse
+  operationActions: ProjectOperationActionResponse[]
 }
 
 export interface ProjectActivityLogResponse {
@@ -82,6 +87,55 @@ export interface ProjectCommitResponse {
   message: string
   author: string
   committedAt: string
+  relativeTime: string
+}
+
+export interface ProjectChatSettingsResponse {
+  projectId: number
+  changeApprovalRequired: boolean
+  deploymentApprovalRequired: boolean
+  domainApprovalRequired: boolean
+  infraApprovalRequired: boolean
+}
+
+export interface ProjectInfrastructureSettingsResponse {
+  projectId: number
+  cloudConnectionId: number | null
+  provider: string | null
+  displayName: string | null
+  region: string | null
+  status: string | null
+  lastCheckedAt: string | null
+  updatedAt: string | null
+}
+
+export interface ProjectDomainSummaryResponse {
+  domainId: number
+  hostname: string
+  url: string | null
+  type: string
+  hostingTarget: string | null
+  status: string
+  httpsEnforced: boolean
+  certificateStatus: string | null
+  certificateExpiresAt: string | null
+  lastCheckedAt: string | null
+}
+
+export interface ProjectCloudSummaryResponse {
+  configured: boolean
+  cloudConnectionId: number | null
+  provider: string | null
+  displayName: string | null
+  region: string | null
+  status: string | null
+  lastCheckedAt: string | null
+}
+
+export interface ProjectOperationActionResponse {
+  type: string
+  available: boolean
+  reason: string
 }
 
 export interface RepositoryHealthResponse {
