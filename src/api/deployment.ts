@@ -8,6 +8,7 @@ import type {
   DeploymentHistoryResponse,
   DeploymentStatusResponse,
   DeploymentLogsResponse,
+  DeploymentFailureAnalysisResponse,
 } from '../types/deployment'
 
 export function deploy(token: string, projectId: string, payload: DeployPayload) {
@@ -57,6 +58,38 @@ export function getDeploymentStatus(token: string, deploymentId: string) {
 export function getDeploymentLogs(token: string, deploymentId: string) {
   return request<DeploymentLogsResponse>({
     path: `/api/v1/deployments/${deploymentId}/logs`,
+    token,
+  })
+}
+
+// Re-queues a FAILED deployment as a brand new history row (the failed one is kept
+// for audit, not overwritten). 409 if the target isn't currently FAILED.
+export function retryDeployment(token: string, deploymentId: string) {
+  return request<DeployResponse>({
+    path: `/api/v1/deployments/${deploymentId}/retry`,
+    method: 'POST',
+    token,
+  })
+}
+
+// Runs (or re-fetches, idempotently) failure-cause analysis for a FAILED deployment.
+// A first-time analysis collects GitHub Actions logs and calls an LLM, so this call
+// can take ~15-30s — callers should show a spinner/notice, not treat it as hung.
+// 409 if the target isn't currently FAILED.
+export function analyzeDeploymentFailure(token: string, deploymentId: string) {
+  return request<DeploymentFailureAnalysisResponse>({
+    path: `/api/v1/deployments/${deploymentId}/failure-analysis`,
+    method: 'POST',
+    token,
+  })
+}
+
+// Read-only fetch of a previously computed analysis (no LLM/GitHub calls, so it's
+// fast) — 404 if analysis has never been run for this deployment, in which case the
+// caller should fall back to `analyzeDeploymentFailure`.
+export function getDeploymentFailureAnalysis(token: string, deploymentId: string) {
+  return request<DeploymentFailureAnalysisResponse>({
+    path: `/api/v1/deployments/${deploymentId}/failure-analysis`,
     token,
   })
 }

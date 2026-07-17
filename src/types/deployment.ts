@@ -93,3 +93,19 @@ export interface DeploymentLogsResponse {
   jobs: DeploymentJobResponse[]
   logText: string | null
 }
+
+// Backend `AnalysisSource` — which path produced the analysis. RULE_BASED is an
+// automatic fallback when the LLM call itself fails, not a separate mode the caller
+// chooses.
+export type AnalysisSource = 'LLM' | 'RULE_BASED'
+
+export interface DeploymentFailureAnalysisResponse {
+  deploymentId: number
+  // Non-developer-facing summary (Korean, <= 3 sentences).
+  summary: string
+  // Excerpt of the originating log, up to 12,000 chars.
+  logExcerpt: string
+  suggestedFix: string
+  analysisSource: AnalysisSource
+  analyzedAt: string
+}

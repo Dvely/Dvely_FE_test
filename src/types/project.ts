@@ -158,3 +158,70 @@ export interface ProjectRepositorySettingsResponse {
   connectedAt: string | null
   lastSyncedAt: string | null
 }
+
+// The four provider-neutral choices that together describe a project's desired
+// infrastructure shape (backend `InfrastructureConfiguration` domain record). Always
+// sent/received as a complete set of 4 — there's no partial-update variant.
+export type DeploymentArchitecture = 'SERVER' | 'CONTAINER' | 'SERVERLESS'
+export type ComputeTier = 'MICRO' | 'SMALL' | 'MEDIUM' | 'LARGE'
+export type StorageType = 'NONE' | 'OBJECT_STORAGE'
+export type NetworkAccess = 'PUBLIC' | 'PRIVATE'
+
+// PUT body — full-document replace, all 4 fields required (no partial update).
+export interface UpdateProjectInfrastructureConfigurationPayload {
+  deploymentArchitecture: DeploymentArchitecture
+  computeTier: ComputeTier
+  storageType: StorageType
+  networkAccess: NetworkAccess
+}
+
+export interface ProjectInfrastructureConfigurationSettings {
+  deploymentArchitecture: DeploymentArchitecture
+  computeTier: ComputeTier
+  storageType: StorageType
+  networkAccess: NetworkAccess
+  updatedAt: string
+}
+
+// A requested configuration change that's currently gated behind an INFRA_OPERATION
+// approval — `settings` above stays at its last-applied value until this is decided.
+export interface ProjectInfrastructureConfigurationPendingChange {
+  changeId: number
+  approvalId: number
+  action: 'CREATED' | 'UPDATED'
+  deploymentArchitecture: DeploymentArchitecture
+  computeTier: ComputeTier
+  storageType: StorageType
+  networkAccess: NetworkAccess
+  createdAt: string
+}
+
+// GET/PUT `.../settings/infrastructure/configuration` share this exact response
+// shape. `configurable: false` (no CONNECTED cloud connection selected yet — see
+// section 7 CloudConnection / the older `settings/infrastructure` cloud-connection
+// picker) means the PUT below will 409; render the form disabled in that case.
+// `settings` is null until the very first successful save.
+export interface ProjectInfrastructureConfigurationResponse {
+  projectId: number
+  configurable: boolean
+  settings: ProjectInfrastructureConfigurationSettings | null
+  pendingChange: ProjectInfrastructureConfigurationPendingChange | null
+}
+
+// One row of `GET .../configuration/history` — includes PENDING_APPROVAL/REJECTED
+// entries too (full audit trail), not just applied changes.
+export interface ProjectInfrastructureChangeResponse {
+  changeId: number
+  action: 'CREATED' | 'UPDATED'
+  status: 'APPLIED' | 'PENDING_APPROVAL' | 'REJECTED'
+  deploymentArchitecture: DeploymentArchitecture
+  computeTier: ComputeTier
+  storageType: StorageType
+  networkAccess: NetworkAccess
+  // Null for changes that were applied immediately (no approval gate was needed).
+  approvalId: number | null
+  actorUserId: number
+  createdAt: string
+  // Null while still PENDING_APPROVAL.
+  decidedAt: string | null
+}
