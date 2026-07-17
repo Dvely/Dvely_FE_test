@@ -138,3 +138,23 @@ export interface ProjectCommitResponse {
 export interface RepositoryHealthResponse {
   health: string
 }
+
+// `GET /projects/{projectId}/settings/repository` — always 200, even for a project
+// with no repository connected (`connected: false`, and every other repo-specific
+// field is null). `defaultBranch` is a live GitHub lookup made on every request (not
+// cached), so expect ~500ms added latency, degrading to null on lookup failure.
+export interface ProjectRepositorySettingsResponse {
+  projectId: number
+  connected: boolean
+  repositoryFullName: string | null
+  repositoryUrl: string | null
+  defaultBranch: string | null
+  // Unlike the *FullName/*Url/defaultBranch trio above, these three carry the
+  // project's persisted default (e.g. "PRIVATE"/"NOT_BOUND"/...) even when
+  // `connected` is false — they're never null.
+  repositoryVisibility: string
+  bindingStatus: string
+  repositoryHealth: string
+  connectedAt: string | null
+  lastSyncedAt: string | null
+}
