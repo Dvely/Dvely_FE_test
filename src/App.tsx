@@ -1029,7 +1029,10 @@ export default function App() {
         <div className="panel-heading">
           <div>
             <h2>5. 채팅</h2>
-            <p className="hint">공통 Project ID와 Conversation ID를 이어서 사용합니다.</p>
+            <p className="hint">
+              공통 Project ID와 Conversation ID를 이어서 사용합니다. 메시지 전송이 Agent
+              작업을 큐잉하면 응답의 taskId가 9번 Agent Task ID에 자동 반영됩니다.
+            </p>
           </div>
         </div>
 
@@ -1161,11 +1164,19 @@ export default function App() {
               ) {
                 return
               }
-              void runAuthed('chat.messages.send', (t) =>
-                sendMessage(t, conversationId, {
-                  content: messageContent,
-                }),
-              )
+              void (async () => {
+                const result = await runAuthed('chat.messages.send', (t) =>
+                  sendMessage(t, conversationId, {
+                    content: messageContent,
+                  }),
+                )
+                // If the message queued an Agent task, hand its taskId to the shared
+                // Agent Task ID field (section 9) so it can be polled immediately
+                // without copy-pasting from the raw response JSON.
+                if (result?.taskId) {
+                  setAgentTaskId(result.taskId)
+                }
+              })()
             }}
             disabled={loading['chat.messages.send']}
           >

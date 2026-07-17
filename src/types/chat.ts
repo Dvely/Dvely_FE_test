@@ -23,6 +23,11 @@ export interface MessageResponse {
   content: string
   tokenCount: number
   createdAt: string
+  // Agent task queued alongside this message, when the approval policy accepted it.
+  // Null when no task was created (e.g. Decision Agent failed to plan) or when this
+  // response comes from a message-history read rather than a fresh send. Poll
+  // `GET /agent/tasks/{taskId}` to track it.
+  taskId: string | null
 }
 
 export interface SendMessagePayload {
