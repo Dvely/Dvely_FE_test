@@ -21,6 +21,9 @@ import {
   getRepositoryHealth,
   getRepositorySettings,
   disconnectProjectRepository,
+  getInfrastructureConfiguration,
+  updateInfrastructureConfiguration,
+  getInfrastructureConfigurationHistory,
 } from './api/project'
 import {
   listConversations,
@@ -40,6 +43,9 @@ import {
   getDeploymentHistories,
   getDeploymentStatus,
   getDeploymentLogs,
+  retryDeployment,
+  analyzeDeploymentFailure,
+  getDeploymentFailureAnalysis,
 } from './api/deployment'
 import {
   searchDomains,
@@ -74,11 +80,16 @@ import {
 import { tokenStorage } from './lib/token'
 import type { AuthStep } from './types/auth'
 import type {
+  ComputeTier,
+  DeploymentArchitecture,
   GithubRepositoryResponse,
+  NetworkAccess,
   ProjectCreateResponse,
+  ProjectInfrastructureConfigurationResponse,
   ProjectRepositoryResponse,
   ProjectRepositorySettingsResponse,
   ProjectSummaryResponse,
+  StorageType,
 } from './types/project'
 import type { ConversationResponse } from './types/chat'
 import type { DeployTargetType, VersionResponse } from './types/deployment'
@@ -242,6 +253,19 @@ export default function App() {
   // (expected, not an error) 3-second stats-collection timeout.
   const [previewStatus, setPreviewStatus] =
     useState<PreviewContainerStatusResponse | null>(null)
+
+  // Infra configuration form fields default to the cheapest/simplest option of each
+  // enum — these are just starting values for a manual test console, not a
+  // recommendation.
+  const [infraArchitecture, setInfraArchitecture] =
+    useState<DeploymentArchitecture>('SERVER')
+  const [infraComputeTier, setInfraComputeTier] = useState<ComputeTier>('MICRO')
+  const [infraStorageType, setInfraStorageType] = useState<StorageType>('NONE')
+  const [infraNetworkAccess, setInfraNetworkAccess] = useState<NetworkAccess>('PUBLIC')
+  const [infraHistoryLimit, setInfraHistoryLimit] = useState('')
+  // Drives the "configurable: false" / "승인 대기" hints below the form.
+  const [infraConfiguration, setInfraConfiguration] =
+    useState<ProjectInfrastructureConfigurationResponse | null>(null)
 
   const selectedImportRepository = useMemo(
     () =>
@@ -2490,6 +2514,248 @@ export default function App() {
           value={responses['preview.status']}
         />
         <ResponseView label="Container Logs Response" value={responses['preview.logs']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>13. 배포 실패 복구</h2>
+            <p className="hint">
+              6번 배포 섹션의 공통 Deployment ID로 실패(FAILED)한 배포를 재시도하거나
+              원인을 분석합니다. 신규 분석은 GitHub Actions 로그 수집 + LLM 호출로 약
+              15~30초가 걸릴 수 있습니다 — 버튼이 "요청 중..."으로 바뀐 동안 정상
+              대기 중인 것이니 새로고침하지 마세요. 대상이 FAILED가 아니면 409가
+              반환됩니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'deployment.retry'
+              if (!requireFields(key, [['Deployment ID', deploymentId]])) return
+              const result = await runAuthed(key, (t) =>
+                retryDeployment(t, deploymentId),
+              )
+              // Retry creates a brand new history row — hand its id to the shared
+              // Deployment ID field so GET Status/Logs above immediately track it
+              // instead of the old (still-FAILED) one.
+              if (result?.deploymentId) {
+                setDeploymentId(String(result.deploymentId))
+              }
+            }}
+            disabled={loading['deployment.retry']}
+          >
+            {loadingText('deployment.retry', 'POST Retry Deployment')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'deployment.failureAnalysis.run'
+              if (!requireFields(key, [['Deployment ID', deploymentId]])) return
+              void runAuthed(key, (t) =>
+                analyzeDeploymentFailure(t, deploymentId),
+              )
+            }}
+            disabled={loading['deployment.failureAnalysis.run']}
+          >
+            {loadingText(
+              'deployment.failureAnalysis.run',
+              'POST Analyze Failure (15~30초)',
+            )}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'deployment.failureAnalysis.get'
+              if (!requireFields(key, [['Deployment ID', deploymentId]])) return
+              void runAuthed(key, (t) =>
+                getDeploymentFailureAnalysis(t, deploymentId),
+              )
+            }}
+            disabled={loading['deployment.failureAnalysis.get']}
+          >
+            {loadingText('deployment.failureAnalysis.get', 'GET Failure Analysis')}
+          </button>
+        </div>
+
+        <ResponseView label="Retry Response" value={responses['deployment.retry']} />
+        <ResponseView
+          label="Analyze Failure Response"
+          value={responses['deployment.failureAnalysis.run']}
+        />
+        <ResponseView
+          label="Get Failure Analysis Response"
+          value={responses['deployment.failureAnalysis.get']}
+        />
+        {responses['deployment.failureAnalysis.get']?.startsWith('ERROR') && (
+          <p className="hint">
+            404라면 아직 분석을 실행한 적이 없다는 뜻입니다 — 위의 "POST Analyze
+            Failure"를 먼저 호출하세요.
+          </p>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>14. 인프라 설정</h2>
+            <p className="hint">
+              공통 Project ID로 배포 아키텍처/컴퓨팅 티어/스토리지/네트워크 4개 설정을
+              저장·조회합니다. CONNECTED 클라우드 연결이 선택되어 있지 않으면(7번
+              CloudConnection 참고) configurable: false로 응답하며 PUT은 409가
+              됩니다. Chat 설정의 infraApprovalRequired가 true(기본값)이면 PUT은
+              즉시 적용되지 않고 <strong>승인 대기(pendingChange)</strong>로 반환됩니다
+              — 승인/거부는 이 콘솔에 없는 Approval API(
+              <code>POST /approvals/{'{approvalId}'}/approve|reject</code>, 유형
+              INFRA_OPERATION)로 별도 처리해야 합니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Deployment Architecture</span>
+            <select
+              value={infraArchitecture}
+              onChange={(event) =>
+                setInfraArchitecture(event.target.value as DeploymentArchitecture)
+              }
+            >
+              <option value="SERVER">SERVER</option>
+              <option value="CONTAINER">CONTAINER</option>
+              <option value="SERVERLESS">SERVERLESS</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Compute Tier</span>
+            <select
+              value={infraComputeTier}
+              onChange={(event) =>
+                setInfraComputeTier(event.target.value as ComputeTier)
+              }
+            >
+              <option value="MICRO">MICRO</option>
+              <option value="SMALL">SMALL</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="LARGE">LARGE</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Storage Type</span>
+            <select
+              value={infraStorageType}
+              onChange={(event) =>
+                setInfraStorageType(event.target.value as StorageType)
+              }
+            >
+              <option value="NONE">NONE</option>
+              <option value="OBJECT_STORAGE">OBJECT_STORAGE</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Network Access</span>
+            <select
+              value={infraNetworkAccess}
+              onChange={(event) =>
+                setInfraNetworkAccess(event.target.value as NetworkAccess)
+              }
+            >
+              <option value="PUBLIC">PUBLIC</option>
+              <option value="PRIVATE">PRIVATE</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>History Limit</span>
+            <input
+              value={infraHistoryLimit}
+              onChange={(event) => setInfraHistoryLimit(event.target.value)}
+              placeholder="기본 50, 최대 200"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'infra.get'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                getInfrastructureConfiguration(t, projectId),
+              )
+              setInfraConfiguration(result ?? null)
+            }}
+            disabled={loading['infra.get']}
+          >
+            {loadingText('infra.get', 'GET Configuration')}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'infra.update'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                updateInfrastructureConfiguration(t, projectId, {
+                  deploymentArchitecture: infraArchitecture,
+                  computeTier: infraComputeTier,
+                  storageType: infraStorageType,
+                  networkAccess: infraNetworkAccess,
+                }),
+              )
+              setInfraConfiguration(result ?? null)
+            }}
+            disabled={loading['infra.update']}
+          >
+            {loadingText('infra.update', 'PUT Save Configuration')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'infra.history'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              void runAuthed(key, (t) =>
+                getInfrastructureConfigurationHistory(t, projectId, infraHistoryLimit),
+              )
+            }}
+            disabled={loading['infra.history']}
+          >
+            {loadingText('infra.history', 'GET Configuration History')}
+          </button>
+        </div>
+
+        {infraConfiguration && !infraConfiguration.configurable && (
+          <p className="hint">
+            configurable: false — CONNECTED 상태의 클라우드 연결이 선택되어 있지
+            않습니다. 7번 CloudConnection 섹션에서 연결을 등록/검증한 뒤 기존
+            "PUT /settings/infrastructure" (cloudConnectionId 선택) API로 먼저
+            선택해야 이 화면의 저장이 가능합니다.
+          </p>
+        )}
+        {infraConfiguration?.pendingChange && (
+          <p className="hint">
+            승인 대기 중인 변경이 있습니다 (changeId #
+            {infraConfiguration.pendingChange.changeId}, approvalId #
+            {infraConfiguration.pendingChange.approvalId}) — 승인/거부가 결정되기
+            전까지 현재 적용된 설정(settings)은 바뀌지 않습니다.
+          </p>
+        )}
+
+        <ResponseView label="Configuration Response" value={responses['infra.get']} />
+        <ResponseView
+          label="Update Configuration Response"
+          value={responses['infra.update']}
+        />
+        <ResponseView
+          label="Configuration History Response"
+          value={responses['infra.history']}
+        />
       </section>
     </div>
   )
