@@ -56,6 +56,13 @@ import {
   deleteCloudConnection,
 } from './api/cloudconnection'
 import {
+  getEnvironmentVariables,
+  createEnvironmentVariable,
+  updateEnvironmentVariable,
+  deleteEnvironmentVariable,
+  getEnvironmentVariableHistory,
+} from './api/environment'
+import {
   submitDecision,
   getTaskStatus,
   submitTaskInput,
@@ -82,6 +89,10 @@ import type {
   CloudProvider,
   GcpCredentialType,
 } from './types/cloudconnection'
+import type {
+  EnvironmentScope,
+  EnvironmentVariableResponse,
+} from './types/environment'
 import type { AiProvider } from './types/agent'
 import './App.css'
 
@@ -189,6 +200,24 @@ export default function App() {
   const [verificationMethod, setVerificationMethod] =
     useState<VerificationMethod>('CNAME')
   const [domains, setDomains] = useState<DomainResponse[]>([])
+
+  // `environmentScope` is shared by both the list filter (empty = all scopes) and the
+  // create form (required there) — same reuse-one-field pattern as `domainType` above,
+  // kept minimal rather than duplicating a near-identical select per action.
+  const [environmentScope, setEnvironmentScope] = useState<EnvironmentScope | ''>('')
+  const [environmentVariableId, setEnvironmentVariableId] = useState('')
+  const [environmentKey, setEnvironmentKey] = useState('')
+  const [environmentValue, setEnvironmentValue] = useState('')
+  const [environmentSecret, setEnvironmentSecret] = useState(false)
+  // Update-only fields: left blank/unchecked means "don't touch" for value (we omit
+  // the field from the PATCH body), matching the backend's optional-field semantics.
+  // `secret` has no such distinction here since it's one-way anyway (see hint text).
+  const [environmentUpdateValue, setEnvironmentUpdateValue] = useState('')
+  const [environmentUpdateSecret, setEnvironmentUpdateSecret] = useState(false)
+  const [environmentHistoryLimit, setEnvironmentHistoryLimit] = useState('')
+  const [environmentVariables, setEnvironmentVariables] = useState<
+    EnvironmentVariableResponse[]
+  >([])
 
   const [agentContent, setAgentContent] = useState('')
   const [agentProvider, setAgentProvider] = useState<AiProvider>('ANTHROPIC')
@@ -1940,7 +1969,242 @@ export default function App() {
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>7. Agent</h2>
+            <h2>9. Environment</h2>
+            <p className="hint">
+              공통 Project ID로 프로젝트 환경변수/Secrets를 관리합니다. secret=true로 만든
+              변수는 어떤 응답에서도 평문이 노출되지 않으며(항상 value: null), 목록에서
+              "설정됨(숨김)"으로 표시됩니다. secret은 false→true로만 바꿀 수 있고
+              true→false로 되돌리면 400이 반환됩니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Environment Variable ID</span>
+            <input
+              value={environmentVariableId}
+              onChange={(event) => setEnvironmentVariableId(event.target.value)}
+              placeholder="생성/목록에서 자동 입력"
+            />
+          </label>
+          <label className="field">
+            <span>Scope</span>
+            <select
+              value={environmentScope}
+              onChange={(event) =>
+                setEnvironmentScope(event.target.value as EnvironmentScope | '')
+              }
+            >
+              <option value="">(전체 — 목록 조회 전용)</option>
+              <option value="PREVIEW">PREVIEW</option>
+              <option value="PRODUCTION">PRODUCTION</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Key</span>
+            <input
+              value={environmentKey}
+              onChange={(event) => setEnvironmentKey(event.target.value)}
+              placeholder="API_BASE_URL"
+            />
+          </label>
+          <label className="field">
+            <span>Value</span>
+            <input
+              value={environmentValue}
+              onChange={(event) => setEnvironmentValue(event.target.value)}
+              placeholder="https://api.example.com"
+            />
+          </label>
+          <label className="field">
+            <span>Secret</span>
+            <input
+              type="checkbox"
+              checked={environmentSecret}
+              onChange={(event) => setEnvironmentSecret(event.target.checked)}
+            />
+          </label>
+          <label className="field">
+            <span>Update Value (비우면 값 유지)</span>
+            <input
+              value={environmentUpdateValue}
+              onChange={(event) => setEnvironmentUpdateValue(event.target.value)}
+              placeholder="비우면 PATCH body에서 생략"
+            />
+          </label>
+          <label className="field">
+            <span>Update Secret (체크 시 true로 전송)</span>
+            <input
+              type="checkbox"
+              checked={environmentUpdateSecret}
+              onChange={(event) => setEnvironmentUpdateSecret(event.target.checked)}
+            />
+          </label>
+          <label className="field">
+            <span>History Limit</span>
+            <input
+              value={environmentHistoryLimit}
+              onChange={(event) => setEnvironmentHistoryLimit(event.target.value)}
+              placeholder="기본 50, 최대 200"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'env.list'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                getEnvironmentVariables(t, projectId, environmentScope),
+              )
+              if (!result) return
+              setEnvironmentVariables(result)
+              if (!environmentVariableId && result[0]) {
+                setEnvironmentVariableId(String(result[0].environmentVariableId))
+              }
+            }}
+            disabled={loading['env.list']}
+          >
+            {loadingText('env.list', 'GET Variables')}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'env.create'
+              if (
+                !requireFields(key, [
+                  ['Project ID', projectId],
+                  ['Key', environmentKey],
+                  ['Scope', environmentScope],
+                ])
+              ) {
+                return
+              }
+              const result = await runAuthed(key, (t) =>
+                createEnvironmentVariable(t, projectId, {
+                  key: environmentKey.trim(),
+                  value: environmentValue,
+                  // `environmentScope` is validated non-blank by requireFields above,
+                  // so this cast is safe (the empty-string option is filter-only).
+                  scope: environmentScope as EnvironmentScope,
+                  secret: environmentSecret,
+                }),
+              )
+              if (result?.environmentVariableId) {
+                setEnvironmentVariableId(String(result.environmentVariableId))
+              }
+            }}
+            disabled={loading['env.create']}
+          >
+            {loadingText('env.create', 'POST Create Variable')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'env.update'
+              if (
+                !requireFields(key, [
+                  ['Project ID', projectId],
+                  ['Environment Variable ID', environmentVariableId],
+                ])
+              ) {
+                return
+              }
+              void runAuthed(key, (t) =>
+                updateEnvironmentVariable(t, projectId, environmentVariableId, {
+                  // Omit `value` entirely when the field is blank, so an untouched
+                  // input means "keep current value" rather than "set it to ''".
+                  ...(environmentUpdateValue
+                    ? { value: environmentUpdateValue }
+                    : {}),
+                  secret: environmentUpdateSecret,
+                }),
+              )
+            }}
+            disabled={loading['env.update']}
+          >
+            {loadingText('env.update', 'PATCH Update Variable')}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              const key = 'env.delete'
+              if (
+                !requireFields(key, [
+                  ['Project ID', projectId],
+                  ['Environment Variable ID', environmentVariableId],
+                ])
+              ) {
+                return
+              }
+              void runAuthed(key, (t) =>
+                deleteEnvironmentVariable(t, projectId, environmentVariableId),
+              )
+            }}
+            disabled={loading['env.delete']}
+          >
+            {loadingText('env.delete', 'DELETE Variable')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'env.history'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              void runAuthed(key, (t) =>
+                getEnvironmentVariableHistory(t, projectId, environmentHistoryLimit),
+              )
+            }}
+            disabled={loading['env.history']}
+          >
+            {loadingText('env.history', 'GET Variable History')}
+          </button>
+        </div>
+
+        {environmentVariables.length > 0 && (
+          <div className="project-list">
+            {environmentVariables.map((variable) => (
+              <button
+                type="button"
+                className={
+                  String(variable.environmentVariableId) === environmentVariableId
+                    ? 'project-item selected'
+                    : 'project-item'
+                }
+                key={variable.environmentVariableId}
+                onClick={() =>
+                  setEnvironmentVariableId(String(variable.environmentVariableId))
+                }
+              >
+                <strong>
+                  {variable.scope} · {variable.key}
+                </strong>
+                <span>
+                  #{variable.environmentVariableId} ·{' '}
+                  {variable.secret ? '설정됨(숨김)' : variable.value}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <ResponseView label="Variables Response" value={responses['env.list']} />
+        <ResponseView label="Create Variable Response" value={responses['env.create']} />
+        <ResponseView label="Update Variable Response" value={responses['env.update']} />
+        <ResponseView label="Delete Variable Response" value={responses['env.delete']} />
+        <ResponseView label="Variable History Response" value={responses['env.history']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>10. Agent</h2>
             <p className="hint">자연어 요청을 제출하면 taskId를 받아 폴링으로 상태를 확인합니다. WAITING_INPUT이면 질문에 응답하세요.</p>
           </div>
         </div>

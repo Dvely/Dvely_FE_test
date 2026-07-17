@@ -134,6 +134,15 @@
   resize: vertical;
 }
 
+/* Checkboxes (e.g. Environment section's Secret toggles) shouldn't inherit the
+   block-level text-input sizing above — reset to a normal inline control. */
+.field input[type='checkbox'] {
+  width: auto;
+  padding: 0;
+  align-self: flex-start;
+  accent-color: #1c6c53;
+}
+
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
