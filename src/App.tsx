@@ -19,6 +19,8 @@ import {
   getProjectActivityLogs,
   getProjectCommits,
   getRepositoryHealth,
+  getRepositorySettings,
+  disconnectProjectRepository,
 } from './api/project'
 import {
   listConversations,
@@ -62,6 +64,7 @@ import {
   deleteEnvironmentVariable,
   getEnvironmentVariableHistory,
 } from './api/environment'
+import { getPreviewSessionStatus, getPreviewSessionLogs } from './api/preview'
 import {
   submitDecision,
   getTaskStatus,
@@ -74,6 +77,7 @@ import type {
   GithubRepositoryResponse,
   ProjectCreateResponse,
   ProjectRepositoryResponse,
+  ProjectRepositorySettingsResponse,
   ProjectSummaryResponse,
 } from './types/project'
 import type { ConversationResponse } from './types/chat'
@@ -93,6 +97,7 @@ import type {
   EnvironmentScope,
   EnvironmentVariableResponse,
 } from './types/environment'
+import type { PreviewContainerStatusResponse } from './types/preview'
 import type { AiProvider } from './types/agent'
 import './App.css'
 
@@ -223,6 +228,20 @@ export default function App() {
   const [agentProvider, setAgentProvider] = useState<AiProvider>('ANTHROPIC')
   const [agentTaskId, setAgentTaskId] = useState('')
   const [agentInputValue, setAgentInputValue] = useState('')
+
+  const [repositorySettings, setRepositorySettings] =
+    useState<ProjectRepositorySettingsResponse | null>(null)
+
+  // No public "create session" endpoint exists — sessionId is obtained out-of-band
+  // (e.g. from an Agent task's `previewUrl`/DB) and pasted in manually.
+  const [previewSessionId, setPreviewSessionId] = useState('')
+  const [previewTail, setPreviewTail] = useState('')
+  const [previewSinceSeconds, setPreviewSinceSeconds] = useState('')
+  // Kept separately from the raw `responses['preview.status']` JSON so we can render
+  // a friendly "수집 실패" fallback for `resources: null` per the backend's documented
+  // (expected, not an error) 3-second stats-collection timeout.
+  const [previewStatus, setPreviewStatus] =
+    useState<PreviewContainerStatusResponse | null>(null)
 
   const selectedImportRepository = useMemo(
     () =>
@@ -2313,6 +2332,164 @@ export default function App() {
         <ResponseView label="Task Status Response" value={responses['agent.status']} />
         <ResponseView label="Task Input Response" value={responses['agent.input']} />
         <ResponseView label="Close Session Response" value={responses['agent.session.close']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>11. Repository Settings</h2>
+            <p className="hint">
+              공통 Project ID로 저장소 연결 설정을 조회/해제합니다. 저장소가 연결되지
+              않은 프로젝트도 200으로 응답하며 connected: false로 표시됩니다. DELETE는
+              연결 정보만 제거하며 GitHub 저장소·워크플로·Pages는 삭제되지 않습니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'repo.settings'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                getRepositorySettings(t, projectId),
+              )
+              setRepositorySettings(result ?? null)
+            }}
+            disabled={loading['repo.settings']}
+          >
+            {loadingText('repo.settings', 'GET Repository Settings')}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              const key = 'repo.disconnect'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              void runAuthed(key, (t) =>
+                disconnectProjectRepository(t, projectId),
+              )
+            }}
+            disabled={loading['repo.disconnect']}
+          >
+            {loadingText('repo.disconnect', 'DELETE Repository (연결 해제)')}
+          </button>
+        </div>
+
+        {repositorySettings && !repositorySettings.connected && (
+          <p className="hint">
+            이 프로젝트는 연결된 GitHub 저장소가 없습니다. 3번 섹션에서 저장소를
+            연결해 보세요.
+          </p>
+        )}
+
+        <ResponseView
+          label="Repository Settings Response"
+          value={responses['repo.settings']}
+        />
+        <ResponseView
+          label="Disconnect Repository Response"
+          value={responses['repo.disconnect']}
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>12. Preview 운영</h2>
+            <p className="hint">
+              Preview 세션은 별도 생성 API가 없습니다 — Agent CODE 스텝이 내부적으로
+              만든 세션 ID를 taskId/DB에서 확인해 아래에 붙여넣으세요. status 조회는
+              Docker stats 샘플링 때문에 p95 약 1.5초가 걸리므로 5초 이상 주기로
+              폴링하는 것을 권장합니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field span-2">
+            <span>Preview Session ID</span>
+            <input
+              value={previewSessionId}
+              onChange={(event) => setPreviewSessionId(event.target.value)}
+              placeholder="Agent task의 previewUrl / DB에서 확인"
+            />
+          </label>
+          <label className="field">
+            <span>Log Tail</span>
+            <input
+              value={previewTail}
+              onChange={(event) => setPreviewTail(event.target.value)}
+              placeholder="기본 200, [1, 2000]로 clamp"
+            />
+          </label>
+          <label className="field">
+            <span>Log Since Seconds</span>
+            <input
+              value={previewSinceSeconds}
+              onChange={(event) => setPreviewSinceSeconds(event.target.value)}
+              placeholder="최근 N초. 예: 300"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'preview.status'
+              if (!requireFields(key, [['Preview Session ID', previewSessionId]])) {
+                return
+              }
+              const result = await runAuthed(key, (t) =>
+                getPreviewSessionStatus(t, previewSessionId),
+              )
+              setPreviewStatus(result ?? null)
+            }}
+            disabled={loading['preview.status']}
+          >
+            {loadingText('preview.status', 'GET Container Status')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'preview.logs'
+              if (!requireFields(key, [['Preview Session ID', previewSessionId]])) {
+                return
+              }
+              void runAuthed(key, (t) =>
+                getPreviewSessionLogs(
+                  t,
+                  previewSessionId,
+                  previewTail,
+                  previewSinceSeconds,
+                ),
+              )
+            }}
+            disabled={loading['preview.logs']}
+          >
+            {loadingText('preview.logs', 'GET Container Logs')}
+          </button>
+        </div>
+
+        {previewStatus && (
+          <p className="hint">
+            리소스 사용량:{' '}
+            {previewStatus.resources
+              ? `메모리 ${previewStatus.resources.memoryUsagePercent}% · CPU ${previewStatus.resources.cpuPercent}%`
+              : '수집 실패 (컨테이너 미실행이거나 stats 조회가 3초를 초과함 — 정상적으로 발생할 수 있는 상태입니다)'}
+          </p>
+        )}
+
+        <ResponseView
+          label="Container Status Response"
+          value={responses['preview.status']}
+        />
+        <ResponseView label="Container Logs Response" value={responses['preview.logs']} />
       </section>
     </div>
   )

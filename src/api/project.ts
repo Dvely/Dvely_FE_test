@@ -11,6 +11,7 @@ import type {
   ProjectOverviewResponse,
   ProjectActivityLogResponse,
   ProjectCommitResponse,
+  ProjectRepositorySettingsResponse,
   RepositoryHealthResponse,
 } from '../types/project'
 
@@ -104,6 +105,24 @@ export function getProjectCommits(token: string, projectId: string) {
 export function getRepositoryHealth(token: string, projectId: string) {
   return request<RepositoryHealthResponse>({
     path: `/api/v1/projects/${projectId}/repository-health`,
+    token,
+  })
+}
+
+export function getRepositorySettings(token: string, projectId: string) {
+  return request<ProjectRepositorySettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/repository`,
+    token,
+  })
+}
+
+// Disconnects the repository binding only — GitHub repo/workflow/Pages are NOT
+// deleted, and other domains' state (deployments, domains) is left as-is (natural
+// disconnection, not a cascading cleanup). See backend `disconnectRepository` doc.
+export function disconnectProjectRepository(token: string, projectId: string) {
+  return request<null>({
+    path: `/api/v1/projects/${projectId}/repository`,
+    method: 'DELETE',
     token,
   })
 }
