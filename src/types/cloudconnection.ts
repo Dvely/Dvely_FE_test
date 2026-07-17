@@ -5,6 +5,12 @@ export type AwsCredentialType = 'ACCESS_KEY' | 'ROLE_ARN'
 export type GcpCredentialType = 'SERVICE_ACCOUNT_KEY' | 'SERVICE_ACCOUNT_EMAIL'
 
 export type CloudConnectionStatus =
+  // Backend `CloudConnectionStatus` enum (cloudconnection/domain/value) — union kept
+  // in the same declaration order as the backend enum for easier diffing.
+  // VALIDATED: credential-format checks passed, before the live health probe runs.
+  // VERIFYING: an async verification job is currently in flight for this connection.
+  | 'VALIDATED'
+  | 'VERIFYING'
   | 'CHECKING'
   | 'CONNECTED'
   | 'PERMISSION_MISSING'

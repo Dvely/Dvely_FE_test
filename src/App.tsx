@@ -1685,7 +1685,12 @@ export default function App() {
         <div className="panel-heading">
           <div>
             <h2>8. DomainBinding</h2>
-            <p className="hint">공통 Project ID와 Domain ID로 도메인 검색, 연결, DNS 가이드, 검증을 테스트합니다.</p>
+            <p className="hint">
+              공통 Project ID와 Domain ID로 도메인 검색, 연결, DNS 가이드, 검증을 테스트합니다.
+              연결/해제는 Agent task로 비동기 접수(202)되므로, taskId는 자동으로 9번 Agent
+              Task ID에 채워집니다 — 완료 후 "GET Project Domains"를 다시 눌러 domainId를
+              확인하세요.
+            </p>
           </div>
         </div>
 
@@ -1703,7 +1708,7 @@ export default function App() {
             <input
               value={domainId}
               onChange={(event) => setDomainId(event.target.value)}
-              placeholder="도메인 연결 후 자동 입력"
+              placeholder="taskId 완료 후 GET Project Domains로 확인"
             />
           </label>
           <label className="field">
@@ -1821,8 +1826,13 @@ export default function App() {
                       : undefined,
                 }),
               )
-              if (result?.domainId) {
-                setDomainId(String(result.domainId))
+              // NOTE: this is an async submission (HTTP 202) — the response carries a
+              // `taskId`, not a `domainId`. The domain record only exists once the
+              // Agent task finishes, so we hand the taskId to the shared Agent Task ID
+              // field (section 9) for polling, then the operator re-runs
+              // "GET Project Domains" below to pick up the resulting domainId.
+              if (result?.taskId) {
+                setAgentTaskId(result.taskId)
               }
             }}
             disabled={loading['domain.bind']}
@@ -1869,9 +1879,15 @@ export default function App() {
           <button
             type="button"
             className="danger"
-            onClick={() => {
+            onClick={async () => {
               if (!requireFields('domain.delete', [['Domain ID', domainId]])) return
-              void runAuthed('domain.delete', (t) => deleteDomain(t, domainId))
+              // Also async (HTTP 202 + taskId) — same tracking approach as bindDomain.
+              const result = await runAuthed('domain.delete', (t) =>
+                deleteDomain(t, domainId),
+              )
+              if (result?.taskId) {
+                setAgentTaskId(result.taskId)
+              }
             }}
             disabled={loading['domain.delete']}
           >
