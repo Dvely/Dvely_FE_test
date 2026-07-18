@@ -225,3 +225,56 @@ export interface ProjectInfrastructureChangeResponse {
   // Null while still PENDING_APPROVAL.
   decidedAt: string | null
 }
+
+export type CostResourceType = 'COMPUTE' | 'STORAGE' | 'NETWORK'
+
+export type BudgetStatus =
+  | 'NO_BUDGET'
+  | 'WITHIN_BUDGET'
+  | 'OVER_BUDGET'
+  | 'NOT_EVALUABLE'
+
+export interface ProjectResourceCostResponse {
+  resourceType: CostResourceType
+  description: string
+  // Backend `BigDecimal`, serialized by Jackson as a plain JSON number (no custom
+  // string serializer configured) — treat as `number`, not a numeric string.
+  monthlyCost: number
+}
+
+export interface ProjectBudgetResponse {
+  monthlyBudgetAmount: number
+  currency: string
+  updatedAt: string
+}
+
+// `PUT .../settings/cost-budget` request — upsert, idempotent. `currency` may be
+// omitted/undefined (defaults server-side) but if sent must be exactly 'USD' (400
+// otherwise — no other currency is supported yet).
+export interface UpdateProjectBudgetPayload {
+  monthlyBudgetAmount: number
+  currency?: string
+}
+
+// GET/PUT `.../settings/cost-budget` share this exact response shape. Cost is
+// computed on-the-fly on every request (never persisted) from the project's saved
+// `InfrastructureConfiguration` — `costAvailable: false` (not 404) when infra hasn't
+// been configured yet, or no CONNECTED cloud connection is selected (see section 14
+// Infra 설정). All estimation fields degrade to null/[] in that case, and `budget`
+// (if one was already set) is still returned since a budget can be set independently
+// of infra configuration (design D5).
+export interface ProjectCostBudgetResponse {
+  projectId: number
+  costAvailable: boolean
+  provider: 'AWS' | 'GCP' | null
+  currency: string
+  estimatedMonthlyCost: number | null
+  resourceCosts: ProjectResourceCostResponse[]
+  // `assumptions`/`priceTableVersion` describe the static price table itself, not a
+  // per-project computation — both stay populated even when `costAvailable` is false.
+  assumptions: string[]
+  priceTableVersion: string
+  budget: ProjectBudgetResponse | null
+  budgetStatus: BudgetStatus
+  budgetUsagePercent: number | null
+}

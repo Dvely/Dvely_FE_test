@@ -14,8 +14,10 @@ import type {
   ProjectRepositorySettingsResponse,
   ProjectInfrastructureChangeResponse,
   ProjectInfrastructureConfigurationResponse,
+  ProjectCostBudgetResponse,
   RepositoryHealthResponse,
   UpdateProjectInfrastructureConfigurationPayload,
+  UpdateProjectBudgetPayload,
 } from '../types/project'
 
 export function listGithubRepositories(token: string) {
@@ -165,6 +167,40 @@ export function getInfrastructureConfigurationHistory(
   const query = limit ? `?limit=${encodeURIComponent(limit)}` : ''
   return request<ProjectInfrastructureChangeResponse[]>({
     path: `/api/v1/projects/${projectId}/settings/infrastructure/configuration/history${query}`,
+    token,
+  })
+}
+
+// Cost is recomputed on-the-fly every call (never persisted) — 200 with
+// `costAvailable: false` (not 404) when infra isn't configured or no CONNECTED cloud
+// connection is selected. See `ProjectCostBudgetResponse` for the full contract.
+export function getCostBudget(token: string, projectId: string) {
+  return request<ProjectCostBudgetResponse>({
+    path: `/api/v1/projects/${projectId}/settings/cost-budget`,
+    token,
+  })
+}
+
+// Upsert, idempotent — allowed even before infra is configured (design D5: a budget
+// can be set independently of cost estimation being available yet).
+export function updateCostBudget(
+  token: string,
+  projectId: string,
+  payload: UpdateProjectBudgetPayload,
+) {
+  return request<ProjectCostBudgetResponse>({
+    path: `/api/v1/projects/${projectId}/settings/cost-budget`,
+    method: 'PUT',
+    token,
+    body: payload,
+  })
+}
+
+// Idempotent — 204 even if no budget was set (mirrors infra settings' clear()).
+export function deleteCostBudget(token: string, projectId: string) {
+  return request<null>({
+    path: `/api/v1/projects/${projectId}/settings/cost-budget`,
+    method: 'DELETE',
     token,
   })
 }

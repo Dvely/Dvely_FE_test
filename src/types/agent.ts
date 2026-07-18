@@ -1,6 +1,9 @@
 export type AiProvider = 'ANTHROPIC' | 'OPENAI'
 
-export type AgentType = 'CHAT' | 'CODE' | 'DEPLOY' | 'DOMAIN_BIND'
+// Backend `AgentType` enum (agent/domain/value) — `INFRA_OPERATE` (CloudOps: natural-
+// language infra queries/operations like "서버 상태 보여줘") was missing here even
+// though the backend enum already had it before this session's changes.
+export type AgentType = 'CHAT' | 'CODE' | 'DEPLOY' | 'DOMAIN_BIND' | 'INFRA_OPERATE'
 
 // Backend `TaskStatus` enum (agent/application/dto). Kept in the same order as the
 // backend enum. See `TaskStatusResponse.status` schema doc for the meaning of each
