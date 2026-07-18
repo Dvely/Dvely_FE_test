@@ -24,6 +24,9 @@ import {
   getInfrastructureConfiguration,
   updateInfrastructureConfiguration,
   getInfrastructureConfigurationHistory,
+  getCostBudget,
+  updateCostBudget,
+  deleteCostBudget,
 } from './api/project'
 import {
   listConversations,
@@ -84,6 +87,7 @@ import type {
   DeploymentArchitecture,
   GithubRepositoryResponse,
   NetworkAccess,
+  ProjectCostBudgetResponse,
   ProjectCreateResponse,
   ProjectInfrastructureConfigurationResponse,
   ProjectRepositoryResponse,
@@ -266,6 +270,11 @@ export default function App() {
   // Drives the "configurable: false" / "승인 대기" hints below the form.
   const [infraConfiguration, setInfraConfiguration] =
     useState<ProjectInfrastructureConfigurationResponse | null>(null)
+
+  const [costBudgetAmount, setCostBudgetAmount] = useState('')
+  // Drives the "인프라 설정 필요" hint and the budgetStatus badge — kept separately
+  // from the raw response JSON for the same reason as `infraConfiguration` above.
+  const [costBudget, setCostBudget] = useState<ProjectCostBudgetResponse | null>(null)
 
   const selectedImportRepository = useMemo(
     () =>
@@ -1103,7 +1112,10 @@ export default function App() {
             <h2>5. 채팅</h2>
             <p className="hint">
               공통 Project ID와 Conversation ID를 이어서 사용합니다. 메시지 전송이 Agent
-              작업을 큐잉하면 응답의 taskId가 9번 Agent Task ID에 자동 반영됩니다.
+              작업을 큐잉하면 응답의 taskId가 10번 Agent Task ID에 자동 반영됩니다.
+              "서버 상태 보여줘"/"로그 보여줘"/"재시작해줘"처럼 인프라를 묻거나
+              조작하는 자연어 메시지는 별도 API 없이 이 채팅이 Agent의
+              INFRA_OPERATE 스텝(CloudOps)으로 라우팅해 처리합니다.
             </p>
           </div>
         </div>
@@ -1243,7 +1255,7 @@ export default function App() {
                   }),
                 )
                 // If the message queued an Agent task, hand its taskId to the shared
-                // Agent Task ID field (section 9) so it can be polled immediately
+                // Agent Task ID field (section 10) so it can be polled immediately
                 // without copy-pasting from the raw response JSON.
                 if (result?.taskId) {
                   setAgentTaskId(result.taskId)
@@ -1770,7 +1782,7 @@ export default function App() {
             <h2>8. DomainBinding</h2>
             <p className="hint">
               공통 Project ID와 Domain ID로 도메인 검색, 연결, DNS 가이드, 검증을 테스트합니다.
-              연결/해제는 Agent task로 비동기 접수(202)되므로, taskId는 자동으로 9번 Agent
+              연결/해제는 Agent task로 비동기 접수(202)되므로, taskId는 자동으로 10번 Agent
               Task ID에 채워집니다 — 완료 후 "GET Project Domains"를 다시 눌러 domainId를
               확인하세요.
             </p>
@@ -2756,6 +2768,104 @@ export default function App() {
           label="Configuration History Response"
           value={responses['infra.history']}
         />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>15. Cost &amp; Budget</h2>
+            <p className="hint">
+              공통 Project ID로 월 예상 비용(정적 가격표 기반 추정치, 실시간 클라우드
+              요금 아님)과 예산을 조회·설정·해제합니다. 비용은 매 요청마다 온더플라이로
+              계산되며 저장되지 않습니다. 예산은 14번 인프라 설정과 무관하게 먼저
+              설정할 수 있습니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Monthly Budget Amount (USD)</span>
+            <input
+              value={costBudgetAmount}
+              onChange={(event) => setCostBudgetAmount(event.target.value)}
+              placeholder="50.00"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'cost.get'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) => getCostBudget(t, projectId))
+              setCostBudget(result ?? null)
+            }}
+            disabled={loading['cost.get']}
+          >
+            {loadingText('cost.get', 'GET Cost & Budget')}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'cost.update'
+              if (
+                !requireFields(key, [
+                  ['Project ID', projectId],
+                  ['Monthly Budget Amount', costBudgetAmount],
+                ])
+              ) {
+                return
+              }
+              const result = await runAuthed(key, (t) =>
+                updateCostBudget(t, projectId, {
+                  monthlyBudgetAmount: Number(costBudgetAmount),
+                  currency: 'USD',
+                }),
+              )
+              setCostBudget(result ?? null)
+            }}
+            disabled={loading['cost.update']}
+          >
+            {loadingText('cost.update', 'PUT Save Budget')}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={async () => {
+              const key = 'cost.delete'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              await runAuthed(key, (t) => deleteCostBudget(t, projectId))
+              setCostBudget(null)
+            }}
+            disabled={loading['cost.delete']}
+          >
+            {loadingText('cost.delete', 'DELETE Budget (해제)')}
+          </button>
+        </div>
+
+        {costBudget && !costBudget.costAvailable && (
+          <p className="hint">
+            costAvailable: false — 인프라 설정이 필요합니다. 14번 인프라 설정
+            섹션에서 구성을 저장하고, CONNECTED 클라우드 연결이 선택되어 있는지(7번
+            CloudConnection) 확인하세요. 예산 자체는 인프라 설정 없이도 저장할 수
+            있습니다.
+          </p>
+        )}
+        {costBudget && (
+          <p className={costBudget.budgetStatus === 'OVER_BUDGET' ? 'status error' : 'status'}>
+            budgetStatus: {costBudget.budgetStatus}
+            {costBudget.budgetUsagePercent !== null &&
+              ` · 사용률 ${costBudget.budgetUsagePercent}%`}
+          </p>
+        )}
+
+        <ResponseView label="Cost & Budget Response" value={responses['cost.get']} />
+        <ResponseView label="Update Budget Response" value={responses['cost.update']} />
+        <ResponseView label="Delete Budget Response" value={responses['cost.delete']} />
       </section>
     </div>
   )
