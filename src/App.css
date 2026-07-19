@@ -79,6 +79,17 @@
   letter-spacing: 0;
 }
 
+/* Sub-section heading used for a labeled block inside an existing panel (e.g. Chat
+   설정 inside the 채팅 panel) — smaller than h2 so it doesn't compete with the
+   panel's own numbered heading, but still visually separates the sub-block. */
+.panel h3 {
+  margin: 0;
+  color: #111816;
+  font-size: 15px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
 .hint {
   margin: 6px 0 0;
   color: #69736f;

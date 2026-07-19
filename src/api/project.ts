@@ -14,8 +14,10 @@ import type {
   ProjectRepositorySettingsResponse,
   ProjectInfrastructureChangeResponse,
   ProjectInfrastructureConfigurationResponse,
+  ProjectChatSettingsResponse,
   ProjectCostBudgetResponse,
   RepositoryHealthResponse,
+  UpdateProjectChatSettingsPayload,
   UpdateProjectInfrastructureConfigurationPayload,
   UpdateProjectBudgetPayload,
 } from '../types/project'
@@ -129,6 +131,30 @@ export function disconnectProjectRepository(token: string, projectId: string) {
     path: `/api/v1/projects/${projectId}/repository`,
     method: 'DELETE',
     token,
+  })
+}
+
+// All projects have this document from creation — always 200, never 404.
+export function getChatSettings(token: string, projectId: string) {
+  return request<ProjectChatSettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/chat`,
+    token,
+  })
+}
+
+// PATCH, not PUT, but semantically a full-document replace for the first 4 fields
+// (all required — see `UpdateProjectChatSettingsPayload`). Only
+// `resultApprovalRequired` accepts `null` to mean "leave as-is".
+export function updateChatSettings(
+  token: string,
+  projectId: string,
+  payload: UpdateProjectChatSettingsPayload,
+) {
+  return request<ProjectChatSettingsResponse>({
+    path: `/api/v1/projects/${projectId}/settings/chat`,
+    method: 'PATCH',
+    token,
+    body: payload,
   })
 }
 

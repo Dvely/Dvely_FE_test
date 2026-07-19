@@ -226,6 +226,41 @@ export interface ProjectInfrastructureChangeResponse {
   decidedAt: string | null
 }
 
+// `GET/PATCH /projects/{projectId}/settings/chat` (backend `ProjectChatSettingsResponse`).
+// Every project is initialized with all 5 flags on creation — there's no "unset" state.
+// `true` on any flag means Agent must not proceed with that category of work until a
+// human approves the corresponding Approval record.
+export interface ProjectChatSettingsResponse {
+  projectId: number
+  // CODE (code-change plan) step approval required before execution.
+  changeApprovalRequired: boolean
+  // DEPLOY step approval required before execution.
+  deploymentApprovalRequired: boolean
+  // DOMAIN_BIND (connect/disconnect) step approval required before execution.
+  domainApprovalRequired: boolean
+  // INFRA_OPERATE steps with service/cost impact (e.g. infra config change, preview
+  // restart) approval required before execution. Defaults true.
+  infraApprovalRequired: boolean
+  // Track Z (#56): approval required after a CODE task's preview+diff result is
+  // ready, before it's reflected into main. Defaults true. When false, a finished
+  // CODE task skips `WAITING_RESULT_APPROVAL` entirely and follows the pre-#56
+  // flow (merge happens at deploy time instead) — see `types/agent.ts` `TaskStatus`.
+  resultApprovalRequired: boolean
+}
+
+// PATCH body — the first 4 fields mirror a full-document replace (all required, no
+// partial update), but `resultApprovalRequired` is the one exception: send `null`
+// to leave the current value untouched (added in #56 so older console builds that
+// don't know this field yet can still PATCH the other 4 without accidentally
+// resetting it).
+export interface UpdateProjectChatSettingsPayload {
+  changeApprovalRequired: boolean
+  deploymentApprovalRequired: boolean
+  domainApprovalRequired: boolean
+  infraApprovalRequired: boolean
+  resultApprovalRequired: boolean | null
+}
+
 export type CostResourceType = 'COMPUTE' | 'STORAGE' | 'NETWORK'
 
 export type BudgetStatus =
