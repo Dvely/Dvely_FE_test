@@ -16,9 +16,29 @@ export type TaskStatus =
   | 'RETRY_WAIT'
   | 'RUNNING'
   | 'WAITING_INPUT'
+  // Track Z (#56): entered only right after the plan's last CODE step finishes, when
+  // the project's `resultApprovalRequired` policy is on — the task is parked here
+  // until a human approves/rejects the RESULT approval named by
+  // `TaskStatusResponse.pendingApprovalId`. No worker can claim this state (unlike
+  // RETRY_WAIT), so polling `GET /agent/tasks/{taskId}` will show it unchanged until
+  // that decision is made.
+  | 'WAITING_RESULT_APPROVAL'
   | 'DONE'
   | 'FAILED'
   | 'CANCELLED'
+
+// Backend `ApprovalType` enum (approval/domain/value). CHANGE/DEPLOYMENT/
+// DOMAIN_BINDING/INFRA_OPERATION all gate *execution* of a still-pending plan step;
+// RESULT (#56) is different — it gates reflecting an already-*executed* task's
+// preview state into main. Kept here (rather than a dedicated approval API module)
+// because this console has no approve/reject screen — see the "10. Agent" section
+// hint for the raw `POST /approvals/{id}/approve|reject` call testers run manually.
+export type ApprovalType =
+  | 'CHANGE'
+  | 'DEPLOYMENT'
+  | 'DOMAIN_BINDING'
+  | 'INFRA_OPERATION'
+  | 'RESULT'
 
 export interface AgentStep {
   agentType: AgentType
@@ -62,7 +82,18 @@ export interface TaskStatusResponse {
   suggestedFix: string | null
   attempt: number
   maxAttempts: number
+  // Whether `POST /agent/tasks/{taskId}/retry` would currently succeed (#57): true
+  // only when `pendingApprovalId` is null (no approval blocking this task) AND
+  // `attempt < maxAttempts`. Once `pendingApprovalId` is set, this is forced false
+  // and /retry answers 409 — the approval must be approved/rejected first (approving
+  // it is itself what triggers the retry, no separate /retry call needed).
   retryable: boolean
+  // PENDING approval currently blocking this task (e.g. the auto-fix-and-rebuild
+  // approval BuildFailureRecoveryService creates, or the RESULT approval created by
+  // ResultApprovalGate when `status` is WAITING_RESULT_APPROVAL). Null when nothing
+  // is blocking. Resolve via `POST /approvals/{pendingApprovalId}/approve|reject`
+  // before calling /retry — see `retryable` above.
+  pendingApprovalId: number | null
 }
 
 export interface TaskInputPayload {

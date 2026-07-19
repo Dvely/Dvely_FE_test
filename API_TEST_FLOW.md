@@ -102,6 +102,21 @@ CloudOps는 별도 HTTP 엔드포인트가 없습니다 — 채팅 메시지가 
 
 응답의 `taskId`가 10번 Agent Task ID에 자동 반영되므로, **GET Task Status**로 진행 상황을 확인합니다. 인프라 조작성 요청은 프로젝트 Chat 설정의 승인 정책에 따라 실행 전 승인이 필요할 수 있습니다(이 콘솔에는 Approval 처리 화면이 없으므로 필요 시 `POST /approvals/{approvalId}/approve`를 직접 호출합니다).
 
+### Chat 설정 (승인 정책)
+
+채팅 패널 하단의 **Chat 설정** 블록에서 이 프로젝트의 승인 정책 5개(`changeApprovalRequired`/`deploymentApprovalRequired`/`domainApprovalRequired`/`infraApprovalRequired`/`resultApprovalRequired`)를 조회·수정합니다.
+
+1. 공통 **Project ID**를 확인합니다.
+2. **GET Chat Settings**를 클릭해 현재 정책을 확인합니다 — 폼의 5개 값이 응답으로 자동 동기화됩니다.
+3. 원하는 항목의 체크박스를 켜고 끈 뒤 **PATCH Chat Settings**를 클릭합니다.
+   - 앞 4개(`changeApprovalRequired`~`infraApprovalRequired`)는 항상 전체 값을 보내야 하는 전체 문서 치환입니다(부분 수정 불가).
+   - `Result Approval Required` 셀렉트에서 **유지**를 선택하면 body에 `resultApprovalRequired: null`이 전송되어 현재 값이 그대로 유지됩니다(#56 — 이 필드를 모르는 구버전 클라이언트도 나머지 4개는 그대로 PATCH할 수 있도록 하는 하위 호환 장치입니다).
+
+예상:
+- 신규 프로젝트는 5개 값 모두 기본적으로 `true`입니다.
+- `resultApprovalRequired`가 `true`이면(기본값) CODE 작업 완료 후 태스크가 `WAITING_RESULT_APPROVAL`에서 멈춥니다 — 15번 "결과 승인 2단계 흐름" 참고.
+- `resultApprovalRequired`를 `false`로 바꾸면 이후 완료되는 CODE 작업은 결과 승인 게이트 없이 곧장 반영/배포 흐름을 따릅니다(기존에 진행 중이던 태스크에는 소급 적용되지 않습니다).
+
 ## 6. 배포
 
 1. 공통 **Project ID**를 확인합니다.
@@ -392,6 +407,31 @@ Cost & Budget은 프로젝트의 월 예상 비용을 조회하고 월 예산을
 - 예산(`PUT Save Budget`)은 인프라 설정 여부와 무관하게 언제든 저장할 수 있습니다 — 인프라가 아직 없어도 예산만 먼저 잡아둘 수 있습니다.
 - 예산 저장/해제는 멱등입니다: 같은 금액으로 다시 PUT하거나, 예산이 없는 상태에서 DELETE해도 정상 처리(200/204)됩니다.
 - `estimatedMonthlyCost`가 예산을 초과하면(`estimatedMonthlyCost > monthlyBudgetAmount`) `OVER_BUDGET`, 그 이하면 `WITHIN_BUDGET`입니다. 비용 산출이 불가능한데(`costAvailable: false`) 예산은 설정되어 있으면 `NOT_EVALUABLE`입니다.
+
+## 15. 결과 승인 2단계 흐름(#56)
+
+Track Z(#56)로 추가된 흐름입니다. CODE 작업이 **계획 승인**만으로 곧장 main에 반영되던 기존 방식과 달리, **실행 결과(preview+diff)를 사람이 확인한 뒤** main 반영 여부를 다시 승인하는 2단계 게이트를 거칩니다.
+
+```
+계획 승인 (WAITING_APPROVAL, changeApprovalRequired)
+  -> 실행 (RUNNING, CODE 스텝)
+  -> 결과 승인 (WAITING_RESULT_APPROVAL, resultApprovalRequired가 true일 때만)
+  -> git 반영 (main merge, DONE)
+```
+
+1. 5번 채팅 하단 **Chat 설정**에서 `resultApprovalRequired`가 `true`(기본값)인지 확인합니다.
+2. 10번 Agent 섹션에서 CODE 작업을 포함하는 요청을 제출합니다(예: "React 버튼 색을 파란색으로 바꿔줘").
+3. **GET Task Status**를 반복 호출합니다.
+   - `changeApprovalRequired`가 켜져 있다면 먼저 `WAITING_APPROVAL`을 거칩니다 — 이 콘솔에는 Approval 처리 화면이 없으므로 `POST /approvals/{approvalId}/approve`를 직접 호출해 계획을 승인합니다.
+   - CODE 스텝이 끝나면 상태가 `WAITING_RESULT_APPROVAL`로 바뀌고, 응답의 `pendingApprovalId`가 채워집니다. 콘솔에는 "결과 승인 필요" 안내와 함께 호출할 approve/reject 경로가 표시됩니다.
+4. `POST /approvals/{pendingApprovalId}/approve`를 호출합니다(RESULT 타입 승인 — approve 자체가 main 반영과 태스크 재개를 트리거합니다. reject하면 태스크가 `CANCELLED`로 끝나고 변경은 preview에만 남습니다).
+5. 다시 **GET Task Status**를 호출해 상태가 `DONE`으로 바뀌었는지 확인합니다.
+6. 16번 Change 섹션에서 **GET Project Changes**를 클릭해 방금 만든 변경의 `status`가 `MERGED`(승인한 경우) 또는 `REJECTED`(거부한 경우)로 바뀌었는지, `approvalId`/`prNumber`/`mergeCommitSha`/`mergedAt`이 채워졌는지 확인합니다. **GET Change Diff**로 실제 git diff 텍스트도 확인할 수 있습니다.
+
+예상:
+- `resultApprovalRequired`가 `false`인 프로젝트는 `WAITING_RESULT_APPROVAL`을 건너뛰고 곧장 기존(배포 시점 merge) 흐름을 따릅니다 — Change의 `status`는 게이트를 거치지 않고 `MERGED`/`DEPLOYED`로 전이합니다.
+- `TaskStatusResponse.retryable`은 `pendingApprovalId`가 채워져 있는 동안 항상 `false`입니다 — 먼저 그 승인을 approve/reject해야 `POST /agent/tasks/{taskId}/retry`가 의미를 가집니다(#57).
+- 신규 커밋이 없어(예: 이미 동일한 내용) PR 없이 반영 처리된 경우 `prNumber`는 `null`일 수 있습니다.
 
 ## 참고
 

@@ -24,10 +24,13 @@ import {
   getInfrastructureConfiguration,
   updateInfrastructureConfiguration,
   getInfrastructureConfigurationHistory,
+  getChatSettings,
+  updateChatSettings,
   getCostBudget,
   updateCostBudget,
   deleteCostBudget,
 } from './api/project'
+import { listProjectChanges, getChange, getChangeDiff } from './api/change'
 import {
   listConversations,
   createConversation,
@@ -87,6 +90,7 @@ import type {
   DeploymentArchitecture,
   GithubRepositoryResponse,
   NetworkAccess,
+  ProjectChatSettingsResponse,
   ProjectCostBudgetResponse,
   ProjectCreateResponse,
   ProjectInfrastructureConfigurationResponse,
@@ -95,6 +99,7 @@ import type {
   ProjectSummaryResponse,
   StorageType,
 } from './types/project'
+import type { ChangeResponse } from './types/change'
 import type { ConversationResponse } from './types/chat'
 import type { DeployTargetType, VersionResponse } from './types/deployment'
 import type {
@@ -113,7 +118,7 @@ import type {
   EnvironmentVariableResponse,
 } from './types/environment'
 import type { PreviewContainerStatusResponse } from './types/preview'
-import type { AiProvider } from './types/agent'
+import type { AiProvider, TaskStatusResponse } from './types/agent'
 import './App.css'
 
 const AUTH_STEP_MESSAGES: Partial<Record<AuthStep, string>> = {
@@ -186,6 +191,22 @@ export default function App() {
   const [conversationId, setConversationId] = useState('')
   const [messageContent, setMessageContent] = useState('')
 
+  // Chat 승인 정책 폼 — GET 응답과는 의도적으로 분리된 입력값입니다(13번 인프라 설정의
+  // `infra*` 필드들과 같은 패턴). 4개는 항상 boolean으로 전송하고, PATCH의 유일한
+  // nullable 필드인 resultApprovalRequired만 3-state(유지/true/false)로 다뤄
+  // "현재 값 유지"를 명시적으로 테스트할 수 있게 합니다.
+  const [chatChangeApprovalRequired, setChatChangeApprovalRequired] = useState(true)
+  const [chatDeploymentApprovalRequired, setChatDeploymentApprovalRequired] =
+    useState(true)
+  const [chatDomainApprovalRequired, setChatDomainApprovalRequired] = useState(true)
+  const [chatInfraApprovalRequired, setChatInfraApprovalRequired] = useState(true)
+  const [chatResultApprovalRequired, setChatResultApprovalRequired] = useState<
+    'keep' | 'true' | 'false'
+  >('keep')
+  const [chatSettings, setChatSettings] = useState<ProjectChatSettingsResponse | null>(
+    null,
+  )
+
   const [deployTargetType, setDeployTargetType] = useState<DeployTargetType>('LATEST')
   const [deployVersionName, setDeployVersionName] = useState('')
   const [versionId, setVersionId] = useState('')
@@ -243,6 +264,17 @@ export default function App() {
   const [agentProvider, setAgentProvider] = useState<AiProvider>('ANTHROPIC')
   const [agentTaskId, setAgentTaskId] = useState('')
   const [agentInputValue, setAgentInputValue] = useState('')
+  // Drives the WAITING_RESULT_APPROVAL / pendingApprovalId hint below the Agent
+  // buttons — kept separately from the raw `responses['agent.status']` JSON for the
+  // same reason as `infraConfiguration`/`previewStatus` above.
+  const [agentTaskStatus, setAgentTaskStatus] = useState<TaskStatusResponse | null>(
+    null,
+  )
+
+  const [changeId, setChangeId] = useState('')
+  // Drives the "GET Project Changes" -> pick one -> Change ID autofill flow, same
+  // pattern as `projects`/`domains` above.
+  const [changes, setChanges] = useState<ChangeResponse[]>([])
 
   const [repositorySettings, setRepositorySettings] =
     useState<ProjectRepositorySettingsResponse | null>(null)
@@ -1115,7 +1147,9 @@ export default function App() {
               작업을 큐잉하면 응답의 taskId가 10번 Agent Task ID에 자동 반영됩니다.
               "서버 상태 보여줘"/"로그 보여줘"/"재시작해줘"처럼 인프라를 묻거나
               조작하는 자연어 메시지는 별도 API 없이 이 채팅이 Agent의
-              INFRA_OPERATE 스텝(CloudOps)으로 라우팅해 처리합니다.
+              INFRA_OPERATE 스텝(CloudOps)으로 라우팅해 처리합니다. 이 프로젝트의
+              승인 정책(어떤 작업에 승인이 필요한지)은 이 패널 하단 "Chat 설정"에서
+              확인·수정합니다.
             </p>
           </div>
         </div>
@@ -1294,6 +1328,150 @@ export default function App() {
           value={responses['chat.messages.list']}
         />
         <ResponseView label="Send Message Response" value={responses['chat.messages.send']} />
+
+        <div className="panel-heading">
+          <div>
+            <h3>Chat 설정 (승인 정책)</h3>
+            <p className="hint">
+              공통 Project ID로 이 프로젝트의 Agent 승인 정책 5개를 조회·수정합니다.
+              true인 항목은 Agent가 해당 작업을 실행(또는 실행 결과를 main에 반영)하기
+              전에 사람의 승인을 요구합니다. PATCH는 앞 4개 필드는 항상 전체 값을
+              보내야 하는 전체 문서 치환이고(부분 수정 불가), resultApprovalRequired만
+              예외로 "유지"를 선택하면 body에 <code>null</code>을 보내 현재 값을
+              그대로 둡니다. resultApprovalRequired가 true(기본값)이면 CODE 작업 완료
+              직후 태스크가 <code>WAITING_RESULT_APPROVAL</code>로 멈춰 RESULT 승인을
+              기다립니다 — 10번 Agent 섹션 참고.
+            </p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Change Approval Required (CODE)</span>
+            <input
+              type="checkbox"
+              checked={chatChangeApprovalRequired}
+              onChange={(event) =>
+                setChatChangeApprovalRequired(event.target.checked)
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Deployment Approval Required (DEPLOY)</span>
+            <input
+              type="checkbox"
+              checked={chatDeploymentApprovalRequired}
+              onChange={(event) =>
+                setChatDeploymentApprovalRequired(event.target.checked)
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Domain Approval Required (DOMAIN_BIND)</span>
+            <input
+              type="checkbox"
+              checked={chatDomainApprovalRequired}
+              onChange={(event) =>
+                setChatDomainApprovalRequired(event.target.checked)
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Infra Approval Required (INFRA_OPERATE)</span>
+            <input
+              type="checkbox"
+              checked={chatInfraApprovalRequired}
+              onChange={(event) =>
+                setChatInfraApprovalRequired(event.target.checked)
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Result Approval Required (RESULT, #56)</span>
+            <select
+              value={chatResultApprovalRequired}
+              onChange={(event) =>
+                setChatResultApprovalRequired(
+                  event.target.value as 'keep' | 'true' | 'false',
+                )
+              }
+            >
+              <option value="keep">유지 (PATCH body에 null 전송)</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'chat.settings.get'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) => getChatSettings(t, projectId))
+              setChatSettings(result ?? null)
+              // Sync the form to the fetched values so a follow-up PATCH round-trips
+              // the untouched fields back unchanged instead of overwriting them with
+              // stale defaults (같은 "값 없이 저장" 실수를 방지).
+              if (result) {
+                setChatChangeApprovalRequired(result.changeApprovalRequired)
+                setChatDeploymentApprovalRequired(result.deploymentApprovalRequired)
+                setChatDomainApprovalRequired(result.domainApprovalRequired)
+                setChatInfraApprovalRequired(result.infraApprovalRequired)
+                setChatResultApprovalRequired(
+                  result.resultApprovalRequired ? 'true' : 'false',
+                )
+              }
+            }}
+            disabled={loading['chat.settings.get']}
+          >
+            {loadingText('chat.settings.get', 'GET Chat Settings')}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const key = 'chat.settings.update'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                updateChatSettings(t, projectId, {
+                  changeApprovalRequired: chatChangeApprovalRequired,
+                  deploymentApprovalRequired: chatDeploymentApprovalRequired,
+                  domainApprovalRequired: chatDomainApprovalRequired,
+                  infraApprovalRequired: chatInfraApprovalRequired,
+                  resultApprovalRequired:
+                    chatResultApprovalRequired === 'keep'
+                      ? null
+                      : chatResultApprovalRequired === 'true',
+                }),
+              )
+              setChatSettings(result ?? null)
+            }}
+            disabled={loading['chat.settings.update']}
+          >
+            {loadingText('chat.settings.update', 'PATCH Chat Settings')}
+          </button>
+        </div>
+
+        {chatSettings && (
+          <p className="hint">
+            현재 정책 — CODE: {String(chatSettings.changeApprovalRequired)} · DEPLOY:{' '}
+            {String(chatSettings.deploymentApprovalRequired)} · DOMAIN_BIND:{' '}
+            {String(chatSettings.domainApprovalRequired)} · INFRA_OPERATE:{' '}
+            {String(chatSettings.infraApprovalRequired)} · RESULT:{' '}
+            {String(chatSettings.resultApprovalRequired)}
+          </p>
+        )}
+
+        <ResponseView
+          label="Chat Settings Response"
+          value={responses['chat.settings.get']}
+        />
+        <ResponseView
+          label="Update Chat Settings Response"
+          value={responses['chat.settings.update']}
+        />
       </section>
 
       <section className="panel">
@@ -2260,7 +2438,14 @@ export default function App() {
         <div className="panel-heading">
           <div>
             <h2>10. Agent</h2>
-            <p className="hint">자연어 요청을 제출하면 taskId를 받아 폴링으로 상태를 확인합니다. WAITING_INPUT이면 질문에 응답하세요.</p>
+            <p className="hint">
+              자연어 요청을 제출하면 taskId를 받아 폴링으로 상태를 확인합니다.
+              WAITING_INPUT이면 질문에 응답하세요. 전체 흐름은 계획 승인(WAITING_APPROVAL,
+              5번 Chat 설정에 따라) → 실행(RUNNING) → 결과 승인(WAITING_RESULT_APPROVAL,
+              #56 — resultApprovalRequired가 true일 때만) → git 반영(main merge) 순입니다.
+              WAITING_RESULT_APPROVAL은 CODE 스텝이 끝난 뒤에만 나타나며, 승인/거부
+              전까지는 폴링해도 상태가 바뀌지 않습니다.
+            </p>
           </div>
         </div>
 
@@ -2326,9 +2511,11 @@ export default function App() {
           <button
             type="button"
             className="secondary"
-            onClick={() => {
-              if (!requireFields('agent.status', [['Task ID', agentTaskId]])) return
-              void runAuthed('agent.status', (t) => getTaskStatus(t, agentTaskId))
+            onClick={async () => {
+              const key = 'agent.status'
+              if (!requireFields(key, [['Task ID', agentTaskId]])) return
+              const result = await runAuthed(key, (t) => getTaskStatus(t, agentTaskId))
+              setAgentTaskStatus(result ?? null)
             }}
             disabled={loading['agent.status']}
           >
@@ -2363,6 +2550,22 @@ export default function App() {
             {loadingText('agent.session.close', 'DELETE Session')}
           </button>
         </div>
+
+        {agentTaskStatus?.pendingApprovalId != null && (
+          <p className="hint">
+            결과 승인 필요 — pendingApprovalId #{agentTaskStatus.pendingApprovalId}
+            {agentTaskStatus.status === 'WAITING_RESULT_APPROVAL'
+              ? ' (RESULT 승인, CODE 스텝 완료 직후 자동 생성)'
+              : ' (이 승인이 처리되기 전까지 retryable은 항상 false입니다)'}
+            . 이 콘솔에는 Approval 처리 화면이 없으므로{' '}
+            <code>
+              POST /approvals/{agentTaskStatus.pendingApprovalId}/approve
+            </code>{' '}
+            (또는 <code>/reject</code>)를 Swagger 등으로 직접 호출하세요. approve하면
+            RESULT 승인은 main 반영 후 태스크가 재개되고, 다른 유형은 승인 자체가
+            재실행을 트리거합니다.
+          </p>
+        )}
 
         <ResponseView label="Decision Response" value={responses['agent.decision']} />
         <ResponseView label="Task Status Response" value={responses['agent.status']} />
@@ -2866,6 +3069,108 @@ export default function App() {
         <ResponseView label="Cost & Budget Response" value={responses['cost.get']} />
         <ResponseView label="Update Budget Response" value={responses['cost.update']} />
         <ResponseView label="Delete Budget Response" value={responses['cost.delete']} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>16. Change (결과 승인)</h2>
+            <p className="hint">
+              Agent CODE 작업 1건마다 생성되는 코드 변경 결과(Change)를 읽기 전용으로
+              조회합니다. #56 결과 승인 2단계 흐름 전체는 계획 승인(5번 Chat 설정의
+              changeApprovalRequired) → 실행(CODE 스텝, 10번 Agent) → 결과 승인(RESULT,
+              resultApprovalRequired가 true일 때만 — WAITING_RESULT_APPROVAL에서 대기) →
+              git 반영(main merge, 이 화면의 status가 MERGED로 바뀜) 순입니다. status는
+              PREVIEW_READY(아직 main 미반영) → MERGED(반영 완료) 또는 REJECTED(반영
+              거부, preview에만 잔존)로 전이하며, resultApprovalRequired가 false인
+              프로젝트는 게이트 없이 곧장 MERGED/DEPLOYED로 넘어갑니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="fields-grid">
+          <label className="field">
+            <span>Change ID</span>
+            <input
+              value={changeId}
+              onChange={(event) => setChangeId(event.target.value)}
+              placeholder="목록 조회 후 선택 또는 직접 입력"
+            />
+          </label>
+        </div>
+
+        <div className="button-grid">
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              const key = 'change.list'
+              if (!requireFields(key, [['Project ID', projectId]])) return
+              const result = await runAuthed(key, (t) =>
+                listProjectChanges(t, projectId),
+              )
+              if (!result) return
+              setChanges(result)
+              if (!changeId && result[0]) {
+                setChangeId(String(result[0].changeId))
+              }
+            }}
+            disabled={loading['change.list']}
+          >
+            {loadingText('change.list', 'GET Project Changes')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'change.get'
+              if (!requireFields(key, [['Change ID', changeId]])) return
+              void runAuthed(key, (t) => getChange(t, changeId))
+            }}
+            disabled={loading['change.get']}
+          >
+            {loadingText('change.get', 'GET Change')}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const key = 'change.diff'
+              if (!requireFields(key, [['Change ID', changeId]])) return
+              void runAuthed(key, (t) => getChangeDiff(t, changeId))
+            }}
+            disabled={loading['change.diff']}
+          >
+            {loadingText('change.diff', 'GET Change Diff')}
+          </button>
+        </div>
+
+        {changes.length > 0 && (
+          <div className="project-list">
+            {changes.map((change) => (
+              <button
+                type="button"
+                className={
+                  String(change.changeId) === changeId
+                    ? 'project-item selected'
+                    : 'project-item'
+                }
+                key={change.changeId}
+                onClick={() => setChangeId(String(change.changeId))}
+              >
+                <strong>{change.summary}</strong>
+                <span>
+                  #{change.changeId} · {change.status}
+                  {change.prNumber != null ? ` · PR #${change.prNumber}` : ''}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <ResponseView label="Project Changes Response" value={responses['change.list']} />
+        <ResponseView label="Change Detail Response" value={responses['change.get']} />
+        <ResponseView label="Change Diff Response" value={responses['change.diff']} />
       </section>
     </div>
   )
